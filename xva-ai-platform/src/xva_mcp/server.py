@@ -1,7 +1,9 @@
 """XVA data MCP server: read-only, typed tools with entitlement checks and an audit line per call.
 
 Run locally for development (sample data, stdio):
-    XVA_ENV=dev XVA_STORE_PATH=sample_data/xva_store.duckdb python -m xva_mcp.server
+    XVA_ENV=dev XVA_STORE_PATH=sample_data/xva_store.sqlite python -m xva_mcp.server
+
+The store is SQLite by default (no extra package) or DuckDB; see db.py for how the backend is chosen.
 
 Run in production (Streamable HTTP behind TLS, tokens from the bank's identity provider):
     XVA_OAUTH_ISSUER=... XVA_OAUTH_AUDIENCE=... XVA_OAUTH_JWKS_URL=... XVA_RESOURCE_URL=... \

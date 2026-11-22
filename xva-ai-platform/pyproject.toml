@@ -10,7 +10,6 @@ requires-python = ">=3.10"
 dependencies = [
   "mcp>=1.20,<2",        # pin to the v1 line until v2 leaves pre-release
   "pydantic>=2.7",
-  "duckdb>=1.1",
   "pyyaml>=6",
 ]
 
@@ -18,6 +17,7 @@ dependencies = [
 auth = ["pyjwt[crypto]>=2.10"]         # JWT validation for the HTTP deployment (lists of issuers)
 landing = ["openpyxl>=3.1"]            # reading the MFL workbook
 sql = ["pyodbc>=5"]                    # stored procedures
+duckdb = ["duckdb>=1.1"]               # optional store backend; SQLite (built into Python) is the default
 dev = ["pytest>=8", "pyjwt[crypto]>=2.10", "openpyxl>=3.1"]
 
 [project.scripts]

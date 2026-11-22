@@ -10,7 +10,9 @@ and who ran it, applies the checks, writes rows idempotently, and publishes data
 source 'mfl_spreadsheet'. A failed check still publishes status, so the agent can say what is wrong.
 
     python -m xva_landing.land_mfl_workbook --file \\\\share\\xva\\mfl\\2026-11-20.xlsx --as-of 2026-11-20 \\
-        --store /data/xva_store.duckdb
+        --store /data/xva_store.sqlite
+
+The store can be SQLite (default) or DuckDB, chosen as described in xva_mcp/db.py.
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import duckdb
+from xva_mcp import db
 
 from . import checks
 
@@ -87,7 +89,7 @@ def land(path: str | Path, as_of: date, store_path: str | Path, loaded_by: str |
 
     now = datetime.now(timezone.utc)
     who = loaded_by or getpass.getuser()
-    with duckdb.connect(str(store_path)) as con:
+    with db.connect(store_path) as con:
         con.execute(
             "CREATE TABLE IF NOT EXISTS mfl_result (as_of DATE, run_id VARCHAR, counterparty_id VARCHAR, "
             "measure VARCHAR, value DOUBLE, source_file_sha256 VARCHAR, loaded_by VARCHAR, loaded_at TIMESTAMPTZ)"
@@ -96,19 +98,18 @@ def land(path: str | Path, as_of: date, store_path: str | Path, loaded_by: str |
             "CREATE TABLE IF NOT EXISTS data_status (as_of DATE, source VARCHAR, run_id VARCHAR, "
             "loaded_at TIMESTAMPTZ, checks_passed BOOLEAN, notes VARCHAR)"
         )
-        con.execute("BEGIN TRANSACTION")
-        con.execute("DELETE FROM mfl_result WHERE as_of = ? AND run_id = ?", [as_of, run_id])
-        if not failures:
-            con.executemany(
-                "INSERT INTO mfl_result VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                [(as_of, run_id, r[0], r[1], float(r[2]), sha256, who, now) for r in numeric],
+        with con.transaction():
+            con.execute("DELETE FROM mfl_result WHERE as_of = ? AND run_id = ?", [as_of, run_id])
+            if not failures:
+                con.executemany(
+                    "INSERT INTO mfl_result VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    [(as_of, run_id, r[0], r[1], float(r[2]), sha256, who, now) for r in numeric],
+                )
+            con.execute("DELETE FROM data_status WHERE as_of = ? AND source = ?", [as_of, SOURCE])
+            con.execute(
+                "INSERT INTO data_status VALUES (?, ?, ?, ?, ?, ?)",
+                [as_of, SOURCE, run_id, now, not failures, "; ".join(failures) or None],
             )
-        con.execute("DELETE FROM data_status WHERE as_of = ? AND source = ?", [as_of, SOURCE])
-        con.execute(
-            "INSERT INTO data_status VALUES (?, ?, ?, ?, ?, ?)",
-            [as_of, SOURCE, run_id, now, not failures, "; ".join(failures) or None],
-        )
-        con.execute("COMMIT")
     return LandingResult(as_of=as_of, run_id=run_id, rows=0 if failures else len(numeric), failures=failures)
 
 

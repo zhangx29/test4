@@ -1,11 +1,12 @@
 from datetime import date
 
-import duckdb
 import pytest
 from openpyxl import Workbook
 from openpyxl.workbook.defined_name import DefinedName
 
+from conftest import STORE_FILES, backends
 from xva_landing import land_mfl_workbook
+from xva_mcp import db
 from xva_landing.land_stored_procs import ProcedureNotAllowed, build_call, run_proc
 
 AS_OF = date(2026, 11, 20)
@@ -32,23 +33,25 @@ def make_workbook(path, rows, control, as_of=AS_OF):
 ROWS = [("CP001", "CVA", -1_000_000.0), ("CP001", "FVA", -250_000.0), ("CP002", "CVA", -400_000.0)]
 
 
-def test_clean_workbook_lands_and_publishes_status(tmp_path):
-    store = tmp_path / "store.duckdb"
+@pytest.mark.parametrize("backend", backends())
+def test_clean_workbook_lands_and_publishes_status(tmp_path, backend):
+    store = tmp_path / STORE_FILES[backend]
     wb = make_workbook(tmp_path / "mfl.xlsx", ROWS, control=-1_650_000.0)
     result = land_mfl_workbook.land(wb, AS_OF, store, loaded_by="tester")
     assert result.passed and result.rows == 3
-    with duckdb.connect(str(store)) as con:
+    with db.connect(store) as con:
         assert con.execute("SELECT COUNT(*) FROM mfl_result").fetchone()[0] == 3
         assert con.execute("SELECT checks_passed FROM data_status").fetchone()[0] is True
     # Landing the same file again is idempotent.
     land_mfl_workbook.land(wb, AS_OF, store, loaded_by="tester")
-    with duckdb.connect(str(store)) as con:
+    with db.connect(store) as con:
         assert con.execute("SELECT COUNT(*) FROM mfl_result").fetchone()[0] == 3
         assert con.execute("SELECT COUNT(*) FROM data_status").fetchone()[0] == 1
 
 
-def test_errors_wrong_date_and_untied_totals_fail_but_still_publish(tmp_path):
-    store = tmp_path / "store.duckdb"
+@pytest.mark.parametrize("backend", backends())
+def test_errors_wrong_date_and_untied_totals_fail_but_still_publish(tmp_path, backend):
+    store = tmp_path / STORE_FILES[backend]
     rows = ROWS + [("CP003", "CVA", "#N/A")]
     wb = make_workbook(tmp_path / "bad.xlsx", rows, control=-1_000.0, as_of=date(2026, 11, 19))
     result = land_mfl_workbook.land(wb, AS_OF, store, loaded_by="tester")
@@ -57,7 +60,7 @@ def test_errors_wrong_date_and_untied_totals_fail_but_still_publish(tmp_path):
     assert "does not match business date" in text
     assert "Excel error #N/A" in text
     assert "do not tie to control cell" in text
-    with duckdb.connect(str(store)) as con:
+    with db.connect(store) as con:
         assert con.execute("SELECT COUNT(*) FROM mfl_result").fetchone()[0] == 0
         passed, notes = con.execute("SELECT checks_passed, notes FROM data_status").fetchone()
         assert passed is False and "control cell" in notes

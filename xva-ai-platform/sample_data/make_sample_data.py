@@ -3,7 +3,10 @@
 All counterparties and numbers are fictional. The P&L explain is constructed so that, per counterparty
 and day, the drivers sum exactly to the change in XVA value; tests rely on that property.
 
-    python sample_data/make_sample_data.py sample_data/xva_store.duckdb
+    python sample_data/make_sample_data.py sample_data/xva_store.sqlite   # SQLite, nothing to install
+    python sample_data/make_sample_data.py sample_data/xva_store.duckdb   # DuckDB, needs the duckdb package
+
+The backend follows the file extension, or XVA_STORE_BACKEND if set (see src/xva_mcp/db.py).
 """
 
 from __future__ import annotations
@@ -13,7 +16,7 @@ import sys
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
-import duckdb
+from xva_mcp import db
 
 START, END = date(2026, 9, 30), date(2026, 11, 20)
 MODEL_CHANGE_DAY = date(2026, 11, 2)
@@ -82,7 +85,12 @@ def build(path: str | Path) -> Path:
     rng = random.Random(42)
     days = business_days(START, END)
 
-    con = duckdb.connect(str(path))
+    with db.connect(path) as con:
+        _write(con, rng, days)
+    return path
+
+
+def _write(con: db.Connection, rng: random.Random, days: list[date]) -> None:
     con.execute(
         "CREATE TABLE dim_counterparty (counterparty_id VARCHAR PRIMARY KEY, name VARCHAR, rating VARCHAR, "
         "sector VARCHAR, region VARCHAR, desk VARCHAR, book VARCHAR)"
@@ -155,14 +163,13 @@ def build(path: str | Path) -> Path:
             ),
         ]
 
-    con.executemany("INSERT INTO xva_value VALUES (?, ?, ?, ?, ?, ?, ?)", values)
-    con.executemany("INSERT INTO xva_pnl_explain VALUES (?, ?, ?, ?, ?, ?, ?)", explains)
-    con.executemany("INSERT INTO xva_sensitivity VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", sens)
-    con.executemany("INSERT INTO data_status VALUES (?, ?, ?, ?, ?, ?)", status)
-    con.close()
-    return path
+    with con.transaction():
+        con.executemany("INSERT INTO xva_value VALUES (?, ?, ?, ?, ?, ?, ?)", values)
+        con.executemany("INSERT INTO xva_pnl_explain VALUES (?, ?, ?, ?, ?, ?, ?)", explains)
+        con.executemany("INSERT INTO xva_sensitivity VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", sens)
+        con.executemany("INSERT INTO data_status VALUES (?, ?, ?, ?, ?, ?)", status)
 
 
 if __name__ == "__main__":
-    out = build(sys.argv[1] if len(sys.argv) > 1 else "sample_data/xva_store.duckdb")
-    print(f"Wrote {out}")
+    out = build(sys.argv[1] if len(sys.argv) > 1 else "sample_data/xva_store.sqlite")
+    print(f"Wrote {out} ({db.backend_for(out)})")

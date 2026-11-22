@@ -1,7 +1,7 @@
-"""Read-only access to the curated XVA store (DuckDB here; swap for the bank's SQL estate).
+"""Read-only access to the curated XVA store (SQLite or DuckDB through db.py; the bank's SQL platform later).
 
 Every query is parameterised. Column and grouping expressions come from fixed dictionaries
-keyed by validated enums, never from caller text.
+keyed by validated enums, never from caller text. The SQL sticks to what SQLite and DuckDB share.
 """
 
 from __future__ import annotations
@@ -12,8 +12,9 @@ from functools import lru_cache
 from importlib import resources
 from typing import Any
 
-import duckdb
 import yaml
+
+from . import db
 
 from .models import (
     CounterpartyInfo,
@@ -62,20 +63,27 @@ def dictionary() -> dict[str, Any]:
     return yaml.safe_load(resources.files("xva_mcp").joinpath("dictionary.yaml").read_text(encoding="utf-8"))
 
 
-def _connect() -> duckdb.DuckDBPyConnection:
-    path = os.environ.get("XVA_STORE_PATH", "xva_store.duckdb")
+def _store_path() -> str:
+    path = os.environ.get("XVA_STORE_PATH", db.DEFAULT_STORE_PATH)
     if not os.path.exists(path):
         raise DataNotAvailable(f"Curated store not found at {path}.")
-    return duckdb.connect(database=path, read_only=True)
+    return path
 
 
 def _rows(sql: str, params: list[Any] | None = None) -> list[tuple]:
-    with _connect() as con:
+    with db.connect(_store_path(), read_only=True) as con:
         return con.execute(sql, params or []).fetchall()
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _utc(ts: datetime | None) -> datetime | None:
+    """Report load times in UTC whatever the backend or the server's time zone."""
+    if ts is None:
+        return None
+    return ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts.astimezone(timezone.utc)
 
 
 # ---------------------------------------------------------------- calendar and status
@@ -105,13 +113,13 @@ def month_start_reference(d: date) -> date | None:
 
 def latest_clean_date(on_or_before: date | None = None) -> date | None:
     expected = dictionary()["expected_sources"]
-    sql = """
+    sql = f"""
         SELECT as_of FROM data_status
-        WHERE source IN (SELECT UNNEST(?::VARCHAR[])) AND checks_passed
+        WHERE source IN ({db.placeholders(len(expected))}) AND checks_passed = TRUE
         GROUP BY as_of HAVING COUNT(DISTINCT source) = ?
         ORDER BY as_of
     """
-    clean = [r[0] for r in _rows(sql, [expected, len(expected)])]
+    clean = [r[0] for r in _rows(sql, [*expected, len(expected)])]
     if on_or_before is not None:
         clean = [x for x in clean if x <= on_or_before]
     return clean[-1] if clean else None
@@ -124,7 +132,7 @@ def data_status(as_of: date) -> DataStatus:
         [as_of],
     )
     sources = [
-        SourceStatus(source=r[0], run_id=r[1], loaded_at=r[2], checks_passed=bool(r[3]), notes=r[4]) for r in rows
+        SourceStatus(source=r[0], run_id=r[1], loaded_at=_utc(r[2]), checks_passed=bool(r[3]), notes=r[4]) for r in rows
     ]
     present = {s.source for s in sources}
     missing = [s for s in expected if s not in present]
@@ -142,8 +150,8 @@ def data_status(as_of: date) -> DataStatus:
 def _run_ids(dates: list[date]) -> list[str]:
     rows = _rows(
         "SELECT DISTINCT run_id FROM data_status WHERE source = 'xva_system' "
-        "AND as_of IN (SELECT UNNEST(?::DATE[])) ORDER BY run_id",
-        [dates],
+        f"AND as_of IN ({db.placeholders(len(dates))}) ORDER BY run_id",
+        list(dates),
     )
     return [r[0] for r in rows]
 
@@ -368,7 +376,7 @@ def search_counterparties(query: str, limit: int) -> CounterpartySearch:
     rows = _rows(
         """
         SELECT counterparty_id, name, rating, sector, region, book FROM dim_counterparty
-        WHERE counterparty_id = upper(?) OR name ILIKE '%' || ? || '%'
+        WHERE counterparty_id = upper(?) OR lower(name) LIKE '%' || lower(?) || '%'
         ORDER BY name LIMIT ?
         """,
         [query, query, limit],

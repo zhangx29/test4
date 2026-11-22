@@ -8,9 +8,21 @@ from sample_data.make_sample_data import build
 from xva_mcp.server import build_server
 
 
+STORE_FILES = {"sqlite": "xva_store.sqlite", "duckdb": "xva_store.duckdb"}
+
+
+def backends() -> list:
+    """SQLite always; DuckDB only when the package is installed (it is optional)."""
+    from xva_mcp.db import duckdb_available
+
+    marks = [] if duckdb_available() else [pytest.mark.skip(reason="duckdb package not installed")]
+    return ["sqlite", pytest.param("duckdb", marks=marks)]
+
+
 @pytest.fixture(scope="session")
 def store_path(tmp_path_factory):
-    path = tmp_path_factory.mktemp("store") / "xva_store.duckdb"
+    # The tool tests run on SQLite, the default backend. test_store_backends.py checks DuckDB gives the same answers.
+    path = tmp_path_factory.mktemp("store") / STORE_FILES["sqlite"]
     build(path)
     return path
 
@@ -23,6 +35,7 @@ def dev_env(store_path, tmp_path, monkeypatch):
     monkeypatch.setenv("XVA_DEV_USER", "test-user")
     monkeypatch.setenv("XVA_AUDIT_LOG", str(tmp_path / "audit.jsonl"))
     monkeypatch.delenv("XVA_ROLE_MAP", raising=False)
+    monkeypatch.delenv("XVA_STORE_BACKEND", raising=False)
     yield
 
 
