@@ -1,0 +1,10 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "xva-dev",
+  "version": "0.1.0",
+  "description": "For xva-ai-admins: developer agent and tool-builder skill, wired to the staging xva-data server.",
+  "author": { "name": "XVA AI admins" },
+  "repository": "https://github.com/<org>/xva-ai-marketplace",
+  "license": "LicenseRef-Proprietary",
+  "keywords": ["xva", "mcp", "developer"]
+}

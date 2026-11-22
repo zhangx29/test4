@@ -1,0 +1,9 @@
+{
+  "extraKnownMarketplaces": {
+    "xva-marketplace": {
+      "source": { "source": "github", "repo": "<org>/xva-ai-marketplace", "ref": "main" },
+      "autoUpdate": true
+    }
+  },
+  "enabledPlugins": { "xva-exec@xva-marketplace": true }
+}

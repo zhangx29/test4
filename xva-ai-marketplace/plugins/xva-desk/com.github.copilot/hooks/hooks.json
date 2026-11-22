@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      { "type": "http", "url": "https://xva-audit.apps.internal.example/copilot/session-start", "timeoutSec": 10 }
+    ],
+    "postToolUse": [
+      { "type": "http", "url": "https://xva-audit.apps.internal.example/copilot/tool-use", "timeoutSec": 10 }
+    ]
+  }
+}

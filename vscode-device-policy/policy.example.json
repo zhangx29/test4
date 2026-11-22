@@ -1,0 +1,15 @@
+{
+  "ChatApprovedAccountOrganizations": ["<org>"],
+  "ChatStrictPluginOnlyCustomization": true,
+  "ChatAllowManagedHooksOnly": true,
+  "ChatToolsAutoApprove": false,
+  "ChatToolsTerminalEnableAutoApprove": false,
+  "ChatAgentExtensionTools": false,
+  "ChatAgentNetworkFilter": true,
+  "ChatAgentAllowedNetworkDomains": ["*.internal.example"],
+  "CopilotSessionSync": false,
+  "CopilotOtelEnabled": true,
+  "CopilotOtelEndpoint": "https://otel-collector.apps.internal.example",
+  "CopilotOtelCaptureContent": false,
+  "AllowedExtensions": { "github": true, "ms-python": true, "microsoft": true }
+}

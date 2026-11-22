@@ -1,0 +1,30 @@
+{
+  "model": { "overridable": "auto" },
+  "permissions": {
+    "disableBypassPermissionsMode": "disable",
+    "deny": ["Read(~/.ssh/**)"]
+  },
+  "strictKnownMarketplaces": [
+    { "source": "github", "repo": "<org>/xva-ai-marketplace" }
+  ],
+  "allowedMcpServers": [
+    { "serverUrl": "https://xva-mcp.apps.internal.example/*" },
+    { "serverUrl": "https://xva-mcp-staging.apps.internal.example/*" }
+  ],
+  "telemetry": {
+    "enabled": true,
+    "endpoint": "https://otel-collector.apps.internal.example",
+    "protocol": "http/protobuf",
+    "capture": {
+      "identity": true,
+      "prompts": false,
+      "responses": false,
+      "toolArguments": true,
+      "toolOutput": false,
+      "policyDetail": true
+    },
+    "lockCaptureContent": true,
+    "serviceName": "copilot",
+    "resourceAttributes": { "deployment.environment": "production" }
+  }
+}

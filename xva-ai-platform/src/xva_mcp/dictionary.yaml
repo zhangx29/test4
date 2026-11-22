@@ -1,0 +1,56 @@
+# XVA data dictionary: the single source of definitions, units and conventions.
+# The MCP server serves it through get_definition, and the skills tell the agent to use it.
+# Replace the placeholder conventions below with the desk's agreed ones before go-live.
+
+reporting_currency: CAD
+sign_convention: "Values are adjustments to derivative fair value: negative = cost to the bank."
+
+measures:
+  CVA:
+    definition: Credit valuation adjustment - expected loss from counterparty default on derivative exposure.
+    unit: CAD
+    additive_across: [netting_set, counterparty, book, desk]
+  DVA:
+    definition: Debit valuation adjustment - value of the bank's own default on negative exposure.
+    unit: CAD
+    additive_across: [netting_set, counterparty, book, desk]
+  FVA:
+    definition: Funding valuation adjustment - funding cost (FCA) net of funding benefit (FBA) on uncollateralised exposure.
+    unit: CAD
+    additive_across: [netting_set, counterparty, book, desk]
+  TOTAL:
+    definition: CVA + DVA + FVA as reported by the official XVA run.
+    unit: CAD
+
+sensitivities:
+  IR:
+    delta: {unit: "CAD per bp", definition: "XVA change for a +1bp move in the zero curve bucket"}
+    vega: {unit: "CAD per vol point", definition: "XVA change for +1 normal vol point in the swaption bucket"}
+  FX:
+    delta: {unit: "CAD per 1%", definition: "XVA change for a +1% move in the FX spot rate"}
+  EQ:
+    delta: {unit: "CAD per 1%", definition: "XVA change for a +1% move in the equity index level"}
+  CO:
+    delta: {unit: "CAD per 1%", definition: "XVA change for a +1% move in the commodity forward curve"}
+  CR:
+    cs01: {unit: "CAD per bp", definition: "XVA change for +1bp in the counterparty credit spread bucket"}
+
+pnl_drivers:
+  market_IR: Interest-rate moves (curves and vols)
+  market_FX: FX spot and vol moves
+  market_EQ: Equity moves
+  market_CO: Commodity moves
+  market_CR: Counterparty credit spread moves
+  time_decay: Passage of time with markets unchanged (theta / roll-down)
+  new_trades: XVA of trades booked since the prior run
+  amendments: Changes to existing trades or CSA terms
+  terminations: Trades matured, unwound or novated away
+  model_or_parameter: Model, methodology or parameter changes
+  unexplained: Residual not attributed to any driver above
+
+expected_sources: [xva_system, mfl_spreadsheet, stored_procs]
+
+thresholds:
+  unexplained_abs_cad: 250000        # flag if |unexplained| exceeds this per day at desk level
+  unexplained_pct_of_change: 0.10    # or exceeds 10% of the XVA change
+  mover_abs_cad: 100000              # counterparty day-on-day move worth a drill-down

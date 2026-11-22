@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "xva-data-staging": {
+      "type": "http",
+      "url": "https://xva-mcp-staging.apps.internal.example/mcp"
+    }
+  }
+}

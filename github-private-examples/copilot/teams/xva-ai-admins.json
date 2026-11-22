@@ -1,0 +1,17 @@
+{
+  "extraKnownMarketplaces": {
+    "xva-marketplace": {
+      "source": { "source": "github", "repo": "<org>/xva-ai-marketplace", "ref": "main" },
+      "autoUpdate": true
+    },
+    "xva-marketplace-staging": {
+      "source": { "source": "github", "repo": "<org>/xva-ai-marketplace", "ref": "staging" },
+      "autoUpdate": true
+    }
+  },
+  "enabledPlugins": {
+    "xva-desk@xva-marketplace": true,
+    "xva-exec@xva-marketplace": true,
+    "xva-dev@xva-marketplace": true
+  }
+}

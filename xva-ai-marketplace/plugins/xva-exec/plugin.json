@@ -1,0 +1,10 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "xva-exec",
+  "version": "0.1.0",
+  "description": "XVA executive brief agent and skill: desk and book level XVA, P&L drivers and headline risk.",
+  "author": { "name": "XVA AI admins" },
+  "repository": "https://github.com/<org>/xva-ai-marketplace",
+  "license": "LicenseRef-Proprietary",
+  "keywords": ["xva", "executive-brief"]
+}
