@@ -7,10 +7,14 @@ import logging
 import os
 import time
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Any, Iterator
 
 _log = logging.getLogger("xva_mcp.audit")
+
+# Which front door the call came through: "mcp" (default), "rest" or "cli". Recorded on every line.
+channel: ContextVar[str] = ContextVar("xva_channel", default="mcp")
 
 
 def _path() -> str:
@@ -60,6 +64,7 @@ def tool_call(
                 "user": user_id,
                 "role": role,
                 "client": client_name(client),
+                "via": channel.get(),
                 "tool": tool,
                 "args": args,
                 "outcome": outcome,

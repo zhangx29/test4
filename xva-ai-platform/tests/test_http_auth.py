@@ -1,3 +1,8 @@
+import pytest
+
+pytest.importorskip("mcp", reason="mcp package not installed")
+pytest.importorskip("jwt", reason="jwt package not installed")
+
 import warnings
 
 import jwt

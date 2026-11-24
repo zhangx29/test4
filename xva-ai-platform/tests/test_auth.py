@@ -1,8 +1,12 @@
+import pytest
+
+pytest.importorskip("mcp", reason="mcp package not installed")
+pytest.importorskip("jwt", reason="jwt package not installed")
+
 import asyncio
 import time
 
 import jwt
-import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from xva_mcp.auth import M365_COPILOT_TOKEN_STORE_CLIENT_ID, JwtTokenVerifier, split_list

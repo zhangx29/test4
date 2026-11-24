@@ -1,3 +1,4 @@
+import pytest
 import json
 import os
 
@@ -49,6 +50,7 @@ M365_CLIENT = "ab3be6b7-f5df-413d-ac2d-abf1e3fd9c0b"
 
 def signed_in(monkeypatch, claims, client_id=M365_CLIENT):
     """Simulate the auth middleware having validated a token for this request."""
+    pytest.importorskip("mcp", reason="mcp package not installed")
     from mcp.server.auth.middleware import auth_context
     from mcp.server.auth.provider import AccessToken
 

@@ -2,10 +2,20 @@ import asyncio
 from typing import Any
 
 import pytest
-from mcp.shared.memory import create_connected_server_and_client_session
 
 from sample_data.make_sample_data import build
-from xva_mcp.server import build_server
+
+# The data layer (store, landing, sample data) needs no MCP packages. Tests that go through the MCP server
+# are skipped, not failed, when the mcp package is missing, e.g. while waiting for the package mirror.
+
+
+def _mcp_session():
+    pytest.importorskip("mcp", reason="mcp package not installed")
+    from mcp.shared.memory import create_connected_server_and_client_session
+
+    from xva_mcp.server import build_server
+
+    return create_connected_server_and_client_session, build_server
 
 
 STORE_FILES = {"sqlite": "xva_store.sqlite", "duckdb": "xva_store.duckdb"}
@@ -47,9 +57,11 @@ def _run(coro_fn):
 def call():
     """Call a tool through a real MCP client session against the in-process server."""
 
+    session, build_server = _mcp_session()
+
     def _call(name: str, args: dict[str, Any] | None = None):
         async def go():
-            async with create_connected_server_and_client_session(build_server(auth=False)) as client:
+            async with session(build_server(auth=False)) as client:
                 return await client.call_tool(name, args or {})
 
         return _run(go)
@@ -59,9 +71,11 @@ def call():
 
 @pytest.fixture
 def list_tools():
+    session, build_server = _mcp_session()
+
     def _list():
         async def go():
-            async with create_connected_server_and_client_session(build_server(auth=False)) as client:
+            async with session(build_server(auth=False)) as client:
                 return (await client.list_tools()).tools
 
         return _run(go)

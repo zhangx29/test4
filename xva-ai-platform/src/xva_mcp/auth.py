@@ -87,3 +87,26 @@ class JwtTokenVerifier(TokenVerifier):
             subject=str(claims.get("oid") or claims.get("sub") or ""),
             claims=claims,
         )
+
+
+def verifier_from_env(env: dict[str, str] | None = None) -> JwtTokenVerifier:
+    """The verifier both front doors use (MCP server and REST API), configured from:
+    XVA_OAUTH_ISSUER (comma-separated; the first is advertised), XVA_OAUTH_AUDIENCE (comma-separated,
+    one per front end), XVA_OAUTH_JWKS_URL and optionally XVA_ALLOWED_CLIENT_IDS (comma-separated)."""
+    import os
+
+    env = dict(os.environ) if env is None else env
+    return JwtTokenVerifier(
+        issuers=env["XVA_OAUTH_ISSUER"],
+        audiences=env["XVA_OAUTH_AUDIENCE"],
+        jwks_url=env["XVA_OAUTH_JWKS_URL"],
+        allowed_client_ids=env.get("XVA_ALLOWED_CLIENT_IDS"),
+    )
+
+
+def required_scopes(env: dict[str, str] | None = None) -> list[str]:
+    import os
+
+    env = dict(os.environ) if env is None else env
+    return env.get("XVA_REQUIRED_SCOPES", "xva.read").split()
+

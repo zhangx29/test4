@@ -16,7 +16,12 @@ import sys
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
-from xva_mcp import db
+# Let the script run straight from a checkout, even before `pip install -e .` has worked.
+_SRC = Path(__file__).resolve().parents[1] / "src"
+if _SRC.is_dir() and str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
+from xva_mcp import db  # noqa: E402
 
 START, END = date(2026, 9, 30), date(2026, 11, 20)
 MODEL_CHANGE_DAY = date(2026, 11, 2)

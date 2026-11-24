@@ -18,7 +18,7 @@ from typing import Any
 
 import yaml
 
-from xva_mcp import server
+from xva_mcp import tools
 
 NUMBER = re.compile(r"(?<![\w.])([-+−]?)\(?(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?\)?\s*([kKmM])?(?![\w])")
 _PATH_PART = re.compile(r"^(\w+)(?:\[(?:(\d+)|(\w+)=([\w-]+))\])?$")
@@ -34,7 +34,7 @@ def expected_value(spec: dict[str, Any]) -> float:
     if role:
         os.environ["XVA_DEV_ROLE"] = role
     try:
-        result = getattr(server, spec["tool"])(**_as_date_args(spec.get("args", {})))
+        result = getattr(tools, spec["tool"])(**_as_date_args(spec.get("args", {})))
     finally:
         if role:
             os.environ["XVA_DEV_ROLE"] = previous or "xva-desk"

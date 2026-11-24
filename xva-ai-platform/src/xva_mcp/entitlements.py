@@ -1,7 +1,8 @@
 """Who is calling, and what they may see.
 
 Production (HTTP): identity comes from the OAuth access token validated by the server
-(see auth.py); the role comes from a group claim mapped through XVA_ROLE_MAP.
+(see auth.py); the role comes from a group claim mapped through XVA_ROLE_MAP. The MCP server
+and the REST API validate tokens the same way and apply the same checks below.
 Development (stdio): identity comes from XVA_DEV_USER / XVA_DEV_ROLE, and only when
 XVA_ENV=dev, so a misconfigured production server can never fall back to it.
 """
@@ -10,7 +11,9 @@ from __future__ import annotations
 
 import json
 import os
+from contextvars import ContextVar
 from dataclasses import dataclass
+from typing import Any
 
 ROLES = ("xva-admin", "xva-desk", "xva-exec")
 
@@ -28,6 +31,11 @@ TOOL_ROLES: dict[str, set[str]] = {
 
 # Roles that may see counterparty-level detail.
 COUNTERPARTY_DETAIL_ROLES = {"xva-admin", "xva-desk"}
+
+
+# Set by the REST API (rest.py) for the duration of a request, after it has validated the bearer token.
+# The MCP server uses the SDK's own auth context instead.
+request_token: ContextVar[Any] = ContextVar("xva_request_token", default=None)
 
 
 class AccessDenied(PermissionError):
@@ -60,12 +68,14 @@ def role_from_groups(groups: list[str]) -> str | None:
 
 def current_user() -> User:
     """Resolve the caller. Raises AccessDenied if no trustworthy identity is available."""
-    try:
-        from mcp.server.auth.middleware.auth_context import get_access_token
+    token = request_token.get()
+    if token is None:
+        try:
+            from mcp.server.auth.middleware.auth_context import get_access_token
 
-        token = get_access_token()
-    except Exception:  # pragma: no cover - auth middleware not installed
-        token = None
+            token = get_access_token()
+        except Exception:  # pragma: no cover - mcp not installed, or no MCP request in progress
+            token = None
 
     if token is not None:
         claims = token.claims or {}

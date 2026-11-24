@@ -11,9 +11,9 @@ Work through [the checklist](references/tool-checklist.md) in order and tick eac
 
 1. **Contract first.** Write the Pydantic output model in `src/xva_mcp/models.py`, with a `provenance` field. Inputs use enums, date types and bounded integers; no free-text filters that reach SQL.
 2. **Store function.** Add a parameterised query in `src/xva_mcp/store.py`. Grouping and column expressions come from fixed dictionaries keyed by validated enums.
-3. **Tool wrapper.** Add the function in `src/xva_mcp/server.py`, route it through `_guarded(...)`, add it to `TOOLS`, and write a docstring that tells the model when to use it and what the fields mean.
+3. **Tool wrapper.** Add the function in `src/xva_mcp/tools.py`, route it through `_guarded(...)`, add it to `TOOLS`, and write a docstring that tells the model when to use it and what the fields mean. Give every argument an `Annotated[..., Field(description=...)]` type. The MCP server, the REST API (`rest.py`, with its OpenAPI description) and the command line (`cli.py`) all pick the tool up from `TOOLS`; add a short command name to `COMMANDS` in `cli.py`.
 4. **Entitlements.** Add the tool to `TOOL_ROLES` in `src/xva_mcp/entitlements.py`. Decide whether executives may call it, and at which level.
-5. **Tests.** Cover: output ties to an independent query, row cap, unknown date, each role's access, audit line written.
+5. **Tests.** Cover: output ties to an independent query, row cap, unknown date, each role's access, audit line written. `test_rest.py` checks that every tool appears in the OpenAPI description with documented parameters.
 6. **Golden questions.** Add at least three to `evals/golden_questions.yaml`, including one the tool must refuse.
 7. **Agents and skills.** Agents use `xva-data/*`, so new tools appear automatically; update skills that should call the tool, and the dictionary if new terms appear.
 8. **Run** `pytest` in xva-ai-platform and `python scripts/validate_customizations.py` in xva-ai-marketplace. Open the pull request; code owners and security review `mcp.json` changes.

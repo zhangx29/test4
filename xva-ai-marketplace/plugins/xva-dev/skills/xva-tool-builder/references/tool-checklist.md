@@ -4,7 +4,8 @@
 - [ ] Inputs are typed and bounded; no SQL, paths or URLs accepted
 - [ ] Query is parameterised; group/column expressions come from a fixed dictionary
 - [ ] Registered with `READ_ONLY` annotations; no side effects
-- [ ] Routed through `_guarded`, listed in `TOOL_ROLES` with the right roles
+- [ ] In `tools.py`, routed through `_guarded`, listed in `TOOL_ROLES` with the right roles
+- [ ] Every argument has a description; short command added to `COMMANDS` in `cli.py`
 - [ ] Executive access decided and tested
 - [ ] Free text from source systems excluded, or truncated and labelled untrusted
 - [ ] Result size capped (`top_n` ≤ 200) and aggregated on the server
