@@ -28,6 +28,7 @@ from typing import Any
 from xva_mcp import db
 
 from . import checks
+from .schema import ensure_schema
 
 HEADER = ["counterparty_id", "measure", "value"]
 SOURCE = "mfl_spreadsheet"
@@ -90,14 +91,7 @@ def land(path: str | Path, as_of: date, store_path: str | Path, loaded_by: str |
     now = datetime.now(timezone.utc)
     who = loaded_by or getpass.getuser()
     with db.connect(store_path) as con:
-        con.execute(
-            "CREATE TABLE IF NOT EXISTS mfl_result (as_of DATE, run_id VARCHAR, counterparty_id VARCHAR, "
-            "measure VARCHAR, value DOUBLE, source_file_sha256 VARCHAR, loaded_by VARCHAR, loaded_at TIMESTAMPTZ)"
-        )
-        con.execute(
-            "CREATE TABLE IF NOT EXISTS data_status (as_of DATE, source VARCHAR, run_id VARCHAR, "
-            "loaded_at TIMESTAMPTZ, checks_passed BOOLEAN, notes VARCHAR)"
-        )
+        ensure_schema(con)
         with con.transaction():
             con.execute("DELETE FROM mfl_result WHERE as_of = ? AND run_id = ?", [as_of, run_id])
             if not failures:

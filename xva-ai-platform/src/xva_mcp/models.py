@@ -7,9 +7,11 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-Level = Literal["desk", "book", "counterparty"]
-AssetClass = Literal["IR", "FX", "EQ", "CO", "CR"]
-SensMeasure = Literal["delta", "vega", "cs01"]
+Level = Literal["desk", "entity", "book", "counterparty"]
+AssetClass = Literal["IR", "FX", "EQ", "CO", "CR", "CARRY"]
+# Sensitivity measures and XVA components come from the data dictionary, so they are plain strings here
+# and are checked against the dictionary when a tool runs.
+SensMeasure = str
 
 
 class Provenance(BaseModel):
@@ -44,10 +46,8 @@ class DataStatus(BaseModel):
 class XvaRow(BaseModel):
     key: str
     label: str
-    cva: float
-    dva: float
-    fva: float
-    total: float
+    components: dict[str, float] = Field(description="Value per XVA component, e.g. CVA, DVA or DVACO, FVA")
+    total: float = Field(description="Sum of the components that make up total XVA (see the data dictionary)")
 
 
 class XvaSummary(BaseModel):
@@ -65,9 +65,7 @@ class MoverRow(BaseModel):
     total_start: float
     total_end: float
     change: float
-    cva_change: float
-    dva_change: float
-    fva_change: float
+    component_changes: dict[str, float] = Field(description="Change per XVA component")
 
 
 class XvaMovers(BaseModel):
@@ -82,9 +80,7 @@ class XvaMovers(BaseModel):
 
 class XvaPoint(BaseModel):
     as_of: date
-    cva: float
-    dva: float
-    fva: float
+    components: dict[str, float]
     total: float
 
 
@@ -105,7 +101,8 @@ class SensitivityReport(BaseModel):
     as_of: date
     asset_class: AssetClass
     measure: SensMeasure
-    group_by: Literal["counterparty", "risk_factor", "bucket"]
+    component: str = Field(description="Which XVA component the sensitivity is of, e.g. XVA, CVA or FVA")
+    group_by: Literal["counterparty", "entity", "risk_factor", "bucket"]
     counterparty_id: str | None
     rows: list[SensRow]
     total: float
@@ -136,10 +133,14 @@ class PnlAttribution(BaseModel):
 class CounterpartyInfo(BaseModel):
     counterparty_id: str
     name: str
-    rating: str
-    sector: str
-    region: str
-    book: str
+    rating: str | None = None
+    sector: str | None = None
+    region: str | None = None
+    book: str | None = None
+    segment: str | None = Field(default=None, description="Desk segment, e.g. SSA")
+    credit_curve: str | None = Field(default=None, description="Credit curve used for the counterparty in XVA")
+    customer_type: str | None = None
+    cpty_type: str | None = None
 
 
 class CounterpartySearch(BaseModel):
@@ -152,3 +153,15 @@ class DefinitionResult(BaseModel):
     found: bool
     entry: dict | None = None
     available_terms: list[str] = []
+
+
+class XvaHistory(BaseModel):
+    start: date
+    end: date
+    basis: str = Field(description="Where the daily desk totals come from")
+    points: list[XvaPoint]
+    first: XvaPoint | None = None
+    last: XvaPoint | None = None
+    change: float | None = Field(default=None, description="Total XVA change from the first to the last point")
+    provenance: Provenance
+

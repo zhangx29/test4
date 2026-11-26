@@ -1,0 +1,70 @@
+# Landing config: how YOUR extract files map to the curated store.
+# Copy to landing_config.yaml and edit the right-hand side of each mapping to match your files.
+# Left side (store column) never changes. Right side is the column header in your file.
+# Validate after every change by landing one day into a test store (see README, "Real data").
+
+source: xva_system        # data_status source for the xva command. Must equal official_source in dictionary.yaml
+default_desk: XVA Desk    # used when the counterparty file has no desk column
+
+datasets:
+  counterparties:
+    file_type: csv        # csv or xlsx
+    # sheet: Static       # xlsx only: sheet name (default: first sheet)
+    # skip_rows: 0        # rows above the header to skip
+    columns:
+      counterparty_id: counterparty_id
+      name: name
+      rating: rating      # optional
+      sector: sector      # optional
+      region: region      # optional
+      desk: desk          # optional
+      book: book          # each counterparty's main book (the tools group books through this table)
+
+  xva_values:
+    file_type: csv
+    columns:
+      as_of: as_of        # optional; if mapped, every row must equal --as-of
+      counterparty_id: counterparty_id
+      netting_set_id: netting_set_id   # optional
+      measure: measure
+      value: value
+    unit: CAD
+    scale: 1              # 1000 if the file is in thousands, 0.001 if in units of 1/1000
+    # value_maps:         # translate your labels to CVA / DVA / FVA
+    #   measure: {"CVA Total": CVA, "DVA Total": DVA, "FVA Total": FVA}
+    # Wide file (one column per measure)? Delete the measure and value lines above and add:
+    # melt:
+    #   field: measure
+    #   columns: {CVA: CVA_AMT, DVA: DVA_AMT, FVA: FVA_AMT}
+
+  sensitivities:
+    file_type: csv
+    columns:
+      as_of: as_of
+      counterparty_id: counterparty_id
+      asset_class: asset_class     # IR, FX, EQ, CO, CR
+      risk_factor: risk_factor     # e.g. CAD-CORRA, USDCAD
+      bucket: bucket               # tenor bucket, e.g. 5Y (optional)
+      measure: measure             # delta, vega or cs01 (see dictionary.yaml)
+      value: value                 # in the unit dictionary.yaml gives, e.g. CAD per bp
+    scale: 1
+    # value_maps:
+    #   asset_class: {RATES: IR, CREDIT: CR, FX: FX, EQUITY: EQ, COMMODITY: CO}
+    #   measure: {DV01: delta, CS01: cs01, VEGA: vega}
+
+  pnl_explain:
+    file_type: csv
+    columns:
+      as_of: as_of
+      counterparty_id: counterparty_id
+      measure: measure             # CVA, DVA or FVA
+      driver: driver               # one of the pnl_drivers in dictionary.yaml
+      value: value
+    unit: CAD
+    scale: 1
+    # value_maps:
+    #   driver: {IR: market_IR, FX: market_FX, CREDIT: market_CR, THETA: time_decay, NEW: new_trades, RESIDUAL: unexplained}
+    # Wide file (one column per driver)? Delete the driver and value lines and add:
+    # melt:
+    #   field: driver
+    #   columns: {market_IR: IR_PNL, market_FX: FX_PNL, market_CR: CR_PNL, time_decay: THETA, unexplained: RESIDUAL}

@@ -5,23 +5,33 @@
 reporting_currency: CAD
 sign_convention: "Values are adjustments to derivative fair value: negative = cost to the bank."
 
+# XVA components stored per counterparty. in_total: true = the component adds into total XVA.
+# A desk with other components (e.g. CVACO, DVACO) uses its own dictionary: see landing/desk_dictionary.yaml
+# and the XVA_DICTIONARY_PATH setting.
 measures:
   CVA:
+    in_total: true
     definition: Credit valuation adjustment - expected loss from counterparty default on derivative exposure.
     unit: CAD
     additive_across: [netting_set, counterparty, book, desk]
   DVA:
+    in_total: true
     definition: Debit valuation adjustment - value of the bank's own default on negative exposure.
     unit: CAD
     additive_across: [netting_set, counterparty, book, desk]
   FVA:
+    in_total: true
     definition: Funding valuation adjustment - funding cost (FCA) net of funding benefit (FBA) on uncollateralised exposure.
     unit: CAD
     additive_across: [netting_set, counterparty, book, desk]
   TOTAL:
-    definition: CVA + DVA + FVA as reported by the official XVA run.
+    definition: Total XVA = CVA + DVA + FVA as reported by the official XVA run.
     unit: CAD
 
+# Which XVA component each sensitivity row is of; the first is the default for get_xva_sensitivities.
+sensitivity_components: [XVA]
+
+# Per asset class: measures in the store (the first is the default). Units come from here.
 sensitivities:
   IR:
     delta: {unit: "CAD per bp", definition: "XVA change for a +1bp move in the zero curve bucket"}
@@ -48,7 +58,13 @@ pnl_drivers:
   model_or_parameter: Model, methodology or parameter changes
   unexplained: Residual not attributed to any driver above
 
+# Sources that must load and pass their checks before a date counts as "clean". List only the sources you
+# actually land, or every date will show them as missing.
 expected_sources: [xva_system, mfl_spreadsheet, stored_procs]
+
+# The source whose run is the official one for XVA values, sensitivities and P&L explain.
+# The tools read the fact tables for this source's run on each date (see data_status).
+official_source: xva_system
 
 thresholds:
   unexplained_abs_cad: 250000        # flag if |unexplained| exceeds this per day at desk level

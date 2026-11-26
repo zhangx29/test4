@@ -1,0 +1,3 @@
+counterparty_id,name,rating,sector,region,desk,book
+CP900,Example Utilities Corp,A,Utilities,Canada,XVA Desk,XVA-CORP
+CP901,Example Pension Plan,AA,Pension,Canada,XVA Desk,XVA-FIN

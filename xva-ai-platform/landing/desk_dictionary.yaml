@@ -1,0 +1,143 @@
+# XVA data dictionary for the desk's daily CSV files (XVA CSV folder). Point the tools at it with
+#   XVA_DICTIONARY_PATH=<kit>\xva-ai-platform\landing\desk_dictionary.yaml
+# on the server, in the VS Code terminal settings, and in daily_load_desk.bat.
+# ITEMS MARKED "CONFIRM" are inferred from the sample files and must be confirmed by the desk.
+
+reporting_currency: CAD
+sign_convention: "Values are adjustments to derivative fair value: negative = cost to the bank."
+
+# Components in XVA_CVA_CVACO_DVACO_FVA_by_Cpty_yyyymmdd.csv. in_total: true = adds into total XVA.
+# Total XVA = CVA + DVACO + FVA (confirmed by the desk); CVACO is a separate adjustment reported alongside.
+measures:
+  CVA:
+    in_total: true
+    definition: Credit valuation adjustment - expected loss from counterparty default on derivative exposure.
+    unit: CAD
+    additive_across: [counterparty, entity, desk]
+  CVACO:
+    in_total: false
+    definition: >-
+      CVA close-out: a separate adjustment reported alongside CVA. It is not part of CVA and not added into
+      total XVA (XVA = CVA + DVACO + FVA).
+    unit: CAD
+    additive_across: [counterparty, entity, desk]
+  DVACO:
+    in_total: true
+    definition: DVA close-out - the only debit valuation adjustment the desk reports; part of total XVA.
+    unit: CAD
+    additive_across: [counterparty, entity, desk]
+  FVA:
+    in_total: true
+    definition: Funding valuation adjustment - funding cost net of funding benefit on uncollateralised exposure.
+    unit: CAD
+    additive_across: [counterparty, entity, desk]
+  TOTAL:
+    definition: Total XVA = CVA + DVACO + FVA, as in the XVA column of the desk files.
+    unit: CAD
+
+entities:
+  BMO: Bank of Montreal
+  BCMC: BMO Capital Markets Corp.
+  BCML: BMO Capital Markets Limited
+
+# Sensitivities are stored for these XVA components; the first is the default.
+# XVA_Sens = CVA_Sens + FVA_Sens in the sample files.
+sensitivity_components: [XVA, CVA, FVA]
+
+sensitivities:
+  IR:
+    pv01:
+      unit: "CAD per bp"   # CONFIRM
+      definition: XVA change for +1bp on one tenor of the curve (columns <CURVE>_PV01_<tenor>; CORRASOFR = CORRA-SOFR basis).
+    pv01_parallel:
+      unit: "CAD per bp"   # CONFIRM
+      definition: >-
+        XVA change for a +1bp parallel shift of the curve (column <CURVE>_PV01). Close to, but not always equal to,
+        the sum of the tenors. Never add it to the tenor values.
+    vega:
+      unit: "CAD per vol unit"   # CONFIRM the vol bump (e.g. 1bp normal vol)
+      definition: XVA change for a vol bump on the currency's swaption vols (columns <CCY>_IR_VOL).
+  FX:
+    delta:
+      unit: "CAD per 1%"   # CONFIRM the spot bump
+      definition: XVA change for a move in the FX spot rate (columns <PAIR>_SPOT).
+    vega:
+      unit: "CAD per vol point"   # CONFIRM
+      definition: XVA change for a +1 vol point move in the FX vol (columns <PAIR>_VOL).
+    gamma_up:
+      unit: "CAD"   # CONFIRM
+      definition: Second-order FX P&L for an up move in spot (USDCAD_UPGAMMA).
+    gamma_down:
+      unit: "CAD"   # CONFIRM
+      definition: Second-order FX P&L for a down move in spot (USDCAD_DNGAMMA).
+    gamma_up_x:
+      unit: "CAD"   # CONFIRM
+      definition: Cross term of the up-gamma with a 1bp move in the CAD or USD rate (bucket CAD01 / USD01). CONFIRM.
+    gamma_down_x:
+      unit: "CAD"   # CONFIRM
+      definition: Cross term of the down-gamma with a 1bp move in the CAD or USD rate (bucket CAD01 / USD01). CONFIRM.
+  CO:
+    delta:
+      unit: "CAD per unit move"   # CONFIRM
+      definition: >-
+        XVA change for a move in one balance-of-year bucket of the commodity curve (BAL0YR = rest of this year,
+        BAL1YR = next year, ..., BALMAX = beyond). AECO, NWROC and WCS are basis curves; NG, OIL, NGL, NBP, AL, CA.
+    delta_parallel:
+      unit: "CAD per unit move"   # CONFIRM
+      definition: XVA change for a parallel move of the commodity or precious-metal curve (<NAME>_DELTA_PARALLEL, XAU_PARALLEL). Never add to the buckets.
+    delta_lag:
+      unit: "CAD per unit move"   # CONFIRM
+      definition: Delta to the lagged index (NG_DELTA_LAG). CONFIRM meaning.
+    spot_delta:
+      unit: "CAD per unit move"   # CONFIRM
+      definition: Precious-metal spot (FX-style) delta (XAU_FX_PARALLEL, XAG, XPD, XPT).
+  EQ:
+    delta:
+      unit: "CAD per 1%"   # CONFIRM
+      definition: XVA change for an equity move (EQ_DELTA).
+  CR:
+    cs01:
+      unit: "CAD per bp"   # CONFIRM
+      definition: >-
+        XVA change for +1bp in a credit spread at one tenor (XVA_ALL01): BMO_CASH = BMO cash funding spread,
+        BMO_CDS = BMO CDS spread, CPTY_CDS = the counterparty's CDS spread.
+    cs01_parallel:
+      unit: "CAD per bp"   # CONFIRM
+      definition: XVA change for a +1bp parallel shift of the credit spread curve (XVA_ALL01 *_Parallel columns).
+    cr01_1pct:
+      unit: "CAD per 1% relative spread move"   # CONFIRM
+      definition: XVA change for a 1% relative widening of the counterparty's spread curve (CPTY_CR01_1pct).
+  CARRY:
+    carry_1d:
+      unit: "CAD per day"
+      definition: Expected one-day XVA carry with markets unchanged (CARRY_1D).
+
+counterparty_attributes:
+  rating: Internal rating number from XVA_ALL01 (RATING)
+  credit_curve: Credit curve used for the counterparty (CREDIT_CURVE, e.g. FS:40)
+  customer_type: Customer type (CUSTOMER_TYPE, e.g. FS)
+  cpty_type: Counterparty type (CPTY_TYPE, e.g. S_P_D, LOW_IG)
+  credit_spread_curve: Spread levels by tenor in months (MTH6 ... MTH600), stored in xva_cpty_curve. CONFIRM units (bp).
+
+# No P&L explain file is produced yet; get_pnl_attribution reports "no data" until one is landed.
+pnl_drivers:
+  market_IR: Interest-rate moves
+  market_FX: FX moves
+  market_CR: Credit spread moves (counterparty and BMO)
+  time_decay: Passage of time with markets unchanged
+  new_trades: XVA of trades booked since the prior run
+  amendments: Changes to existing trades or CSA terms
+  terminations: Trades matured, unwound or novated away
+  model_or_parameter: Model, methodology or parameter changes
+  unexplained: Residual not attributed to any driver above
+
+segments:
+  SSA: Sovereign, supranational and agency counterparties (from the *_SSA_ files). CONFIRM meaning.
+
+expected_sources: [xva_system]
+official_source: xva_system
+
+thresholds:
+  unexplained_abs_cad: 250000
+  unexplained_pct_of_change: 0.10
+  mover_abs_cad: 100000

@@ -9,10 +9,8 @@ Use this structure exactly. Replace everything in angle brackets. Omit the Data 
 
 | Measure | <previous date> | <date> | Change |
 | --- | ---: | ---: | ---: |
-| CVA | | | |
-| DVA | | | |
-| FVA | | | |
-| Total | | | |
+| <one row per component the tool returns, e.g. CVA, CVACO, DVACO, FVA> | | | |
+| Total XVA | | | |
 
 Source: <provenance.source> · as of <date> · run <run_ids> · CAD thousands
 

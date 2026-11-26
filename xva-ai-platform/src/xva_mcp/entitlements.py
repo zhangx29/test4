@@ -25,6 +25,7 @@ TOOL_ROLES: dict[str, set[str]] = {
     "get_xva_movers": {"xva-admin", "xva-desk", "xva-exec"},
     "get_pnl_attribution": {"xva-admin", "xva-desk", "xva-exec"},
     "get_xva_sensitivities": {"xva-admin", "xva-desk", "xva-exec"},
+    "get_xva_history": {"xva-admin", "xva-desk", "xva-exec"},
     "get_counterparty_xva_timeseries": {"xva-admin", "xva-desk"},
     "search_counterparties": {"xva-admin", "xva-desk"},
 }
@@ -104,9 +105,9 @@ def require_tool(user: User, tool: str) -> None:
 
 
 def require_level(user: User, level: str, counterparty_id: str | None = None) -> None:
-    """Executives see desk and book aggregates only."""
+    """Executives see desk, legal entity and book aggregates only."""
     wants_detail = level == "counterparty" or counterparty_id is not None
     if wants_detail and user.role not in COUNTERPARTY_DETAIL_ROLES:
         raise AccessDenied(
-            "Counterparty-level detail is not available for your role. Ask for desk or book level instead."
+            "Counterparty-level detail is not available for your role. Ask for desk, entity or book level instead."
         )

@@ -7,6 +7,7 @@ keyed by validated enums, never from caller text. The SQL sticks to what SQLite 
 from __future__ import annotations
 
 import os
+import re
 from datetime import date, datetime, timezone
 from functools import lru_cache
 from importlib import resources
@@ -29,6 +30,7 @@ from .models import (
     SensitivityReport,
     SensRow,
     SourceStatus,
+    XvaHistory,
     XvaMovers,
     XvaPoint,
     XvaRow,
@@ -37,17 +39,28 @@ from .models import (
 
 SOURCE_LABEL = "XVA system official EOD run (curated store)"
 
+# level -> (key expression, label expression); "{t}" is the fact table's alias
 _GROUP = {
-    "desk": ("c.desk", "c.desk"),
-    "book": ("c.book", "c.book"),
-    "counterparty": ("c.counterparty_id", "c.name"),
+    "desk": ("COALESCE(c.desk, 'Desk')", "COALESCE(c.desk, 'Desk')"),
+    "entity": ("COALESCE({t}.legal_entity, 'n/a')", "COALESCE({t}.legal_entity, 'n/a')"),
+    "book": ("COALESCE(c.book, 'Unassigned')", "COALESCE(c.book, 'Unassigned')"),
+    "counterparty": ("c.counterparty_id", "COALESCE(c.name, c.counterparty_id)"),
 }
 _SENS_GROUP = {
-    "counterparty": ("c.counterparty_id", "c.name"),
+    "counterparty": ("c.counterparty_id", "COALESCE(c.name, c.counterparty_id)"),
+    "entity": ("COALESCE(s.legal_entity, 'n/a')", "COALESCE(s.legal_entity, 'n/a')"),
     "risk_factor": ("s.risk_factor", "s.risk_factor"),
-    "bucket": ("s.risk_factor || ' ' || s.bucket", "s.risk_factor || ' ' || s.bucket"),
+    "bucket": (
+        "s.risk_factor || ' ' || COALESCE(s.bucket, 'parallel')",
+        "s.risk_factor || ' ' || COALESCE(s.bucket, 'parallel')",
+    ),
 }
-_FILTER = {"desk": "c.desk", "book": "c.book", "counterparty": "c.counterparty_id"}
+_FILTER = {
+    "desk": "COALESCE(c.desk, 'Desk')",
+    "entity": "{t}.legal_entity",
+    "book": "COALESCE(c.book, 'Unassigned')",
+    "counterparty": "c.counterparty_id",
+}
 
 
 class DataNotAvailable(LookupError):
@@ -70,9 +83,34 @@ def _store_path() -> str:
     return path
 
 
+_FACT = re.compile(
+    r"\bFROM\s+(xva_value|xva_sensitivity|xva_pnl_explain)\b(?:\s+(?:AS\s+)?(?!(?:WHERE|GROUP|ORDER|JOIN|LIMIT)\b)([a-z]\w*))?",
+    re.IGNORECASE,
+)
+_SAFE_NAME = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
+
+
+def _official_rows_only(sql: str) -> str:
+    """Read fact tables only for each date's official run: the run recorded in data_status for the official
+    source. A restated day is landed as a new run and replaces the official one; older runs stay in the
+    tables for audit but are never added in."""
+    source = official_source()
+    if not _SAFE_NAME.match(source):  # comes from dictionary.yaml, still checked before it reaches SQL
+        raise ValueError(f"official_source {source!r} in dictionary.yaml is not a plain name")
+
+    def sub(m: re.Match[str]) -> str:
+        table, alias = m.group(1), m.group(2) or m.group(1)
+        return (
+            f"FROM (SELECT t.* FROM {table} t WHERE EXISTS (SELECT 1 FROM data_status ds "
+            f"WHERE ds.as_of = t.as_of AND ds.run_id = t.run_id AND ds.source = '{source}')) AS {alias}"
+        )
+
+    return _FACT.sub(sub, sql)
+
+
 def _rows(sql: str, params: list[Any] | None = None) -> list[tuple]:
     with db.connect(_store_path(), read_only=True) as con:
-        return con.execute(sql, params or []).fetchall()
+        return con.execute(_official_rows_only(sql), params or []).fetchall()
 
 
 def _now() -> datetime:
@@ -147,11 +185,32 @@ def data_status(as_of: date) -> DataStatus:
     )
 
 
+def official_source() -> str:
+    return dictionary().get("official_source", "xva_system")
+
+
+def components() -> list[str]:
+    """XVA components stored per counterparty, in dictionary order (measures with an in_total flag)."""
+    return [m for m, spec in dictionary().get("measures", {}).items() if isinstance(spec, dict) and "in_total" in spec]
+
+
+def total_components() -> list[str]:
+    return [m for m in components() if dictionary()["measures"][m]["in_total"]]
+
+
+def _total(values: dict[str, float]) -> float:
+    return sum(values.get(m, 0.0) for m in total_components())
+
+
+def _ordered(values: dict[str, float]) -> dict[str, float]:
+    return {m: values.get(m, 0.0) for m in components()}
+
+
 def _run_ids(dates: list[date]) -> list[str]:
     rows = _rows(
-        "SELECT DISTINCT run_id FROM data_status WHERE source = 'xva_system' "
+        "SELECT DISTINCT run_id FROM data_status WHERE source = ? "
         f"AND as_of IN ({db.placeholders(len(dates))}) ORDER BY run_id",
-        list(dates),
+        [official_source(), *dates],
     )
     return [r[0] for r in rows]
 
@@ -172,25 +231,26 @@ def _provenance(dates: list[date], unit: str | None = None) -> Provenance:
 
 
 def _summary_rows(as_of: date, level: str) -> list[XvaRow]:
-    key_expr, label_expr = _GROUP[level]
+    key_expr, label_expr = (e.format(t="v") for e in _GROUP[level])
     sql = f"""
-        SELECT {key_expr} AS key, {label_expr} AS label,
-               SUM(CASE WHEN v.measure = 'CVA' THEN v.value ELSE 0 END) AS cva,
-               SUM(CASE WHEN v.measure = 'DVA' THEN v.value ELSE 0 END) AS dva,
-               SUM(CASE WHEN v.measure = 'FVA' THEN v.value ELSE 0 END) AS fva
+        SELECT {key_expr} AS key, {label_expr} AS label, v.measure, SUM(v.value)
         FROM xva_value v JOIN dim_counterparty c ON c.counterparty_id = v.counterparty_id
         WHERE v.as_of = ?
-        GROUP BY 1, 2
+        GROUP BY 1, 2, 3
     """
-    out = []
-    for key, label, cva, dva, fva in _rows(sql, [as_of]):
-        out.append(XvaRow(key=key, label=label, cva=cva, dva=dva, fva=fva, total=cva + dva + fva))
+    grouped: dict[tuple[str, str], dict[str, float]] = {}
+    for key, label, measure, value in _rows(sql, [as_of]):
+        grouped.setdefault((key, label), {})[measure] = value
+    out = [
+        XvaRow(key=key, label=label, components=_ordered(vals), total=_total(vals))
+        for (key, label), vals in grouped.items()
+    ]
     return sorted(out, key=lambda r: abs(r.total), reverse=True)
 
 
 def _total_row(rows: list[XvaRow], label: str = "Total") -> XvaRow:
-    cva, dva, fva = (sum(getattr(r, m) for r in rows) for m in ("cva", "dva", "fva"))
-    return XvaRow(key="TOTAL", label=label, cva=cva, dva=dva, fva=fva, total=cva + dva + fva)
+    sums = {m: sum(r.components.get(m, 0.0) for r in rows) for m in components()}
+    return XvaRow(key="TOTAL", label=label, components=sums, total=_total(sums))
 
 
 def xva_summary(as_of: date, level: str, top_n: int) -> XvaSummary:
@@ -213,7 +273,7 @@ def xva_movers(start: date, end: date, level: str, top_n: int) -> XvaMovers:
     _require_date(end)
     before = {r.key: r for r in _summary_rows(start, level)}
     after = {r.key: r for r in _summary_rows(end, level)}
-    zero = XvaRow(key="", label="", cva=0.0, dva=0.0, fva=0.0, total=0.0)
+    zero = XvaRow(key="", label="", components=_ordered({}), total=0.0)
     movers = []
     for key in sorted(set(before) | set(after)):
         b, a = before.get(key, zero), after.get(key, zero)
@@ -224,9 +284,7 @@ def xva_movers(start: date, end: date, level: str, top_n: int) -> XvaMovers:
                 total_start=b.total,
                 total_end=a.total,
                 change=a.total - b.total,
-                cva_change=a.cva - b.cva,
-                dva_change=a.dva - b.dva,
-                fva_change=a.fva - b.fva,
+                component_changes={m: a.components.get(m, 0.0) - b.components.get(m, 0.0) for m in components()},
             )
         )
     movers.sort(key=lambda m: abs(m.change), reverse=True)
@@ -241,22 +299,28 @@ def xva_movers(start: date, end: date, level: str, top_n: int) -> XvaMovers:
     )
 
 
+def _points(rows: list[tuple]) -> list[XvaPoint]:
+    by_date: dict[date, dict[str, float]] = {}
+    for d, measure, value in rows:
+        by_date.setdefault(d, {})[measure] = value
+    return [XvaPoint(as_of=d, components=_ordered(v), total=_total(v)) for d, v in sorted(by_date.items())]
+
+
 def counterparty_timeseries(counterparty_id: str, start: date, end: date) -> CounterpartyTimeseries:
-    names = _rows("SELECT name FROM dim_counterparty WHERE counterparty_id = ?", [counterparty_id])
+    names = _rows("SELECT COALESCE(name, counterparty_id) FROM dim_counterparty WHERE counterparty_id = ?",
+                  [counterparty_id])
     if not names:
         raise DataNotAvailable(f"Unknown counterparty_id {counterparty_id}. Use search_counterparties first.")
-    sql = """
-        SELECT as_of,
-               SUM(CASE WHEN measure = 'CVA' THEN value ELSE 0 END),
-               SUM(CASE WHEN measure = 'DVA' THEN value ELSE 0 END),
-               SUM(CASE WHEN measure = 'FVA' THEN value ELSE 0 END)
-        FROM xva_value WHERE counterparty_id = ? AND as_of BETWEEN ? AND ?
-        GROUP BY as_of ORDER BY as_of
-    """
-    points = [
-        XvaPoint(as_of=d, cva=c, dva=dv, fva=f, total=c + dv + f)
-        for d, c, dv, f in _rows(sql, [counterparty_id, start, end])
-    ]
+    points = _points(
+        _rows(
+            """
+            SELECT as_of, measure, SUM(value) FROM xva_value
+            WHERE counterparty_id = ? AND as_of BETWEEN ? AND ?
+            GROUP BY as_of, measure ORDER BY as_of
+            """,
+            [counterparty_id, start, end],
+        )
+    )
     if not points:
         raise DataNotAvailable(f"No XVA data for {counterparty_id} between {start} and {end}.")
     return CounterpartyTimeseries(
@@ -267,19 +331,96 @@ def counterparty_timeseries(counterparty_id: str, start: date, end: date) -> Cou
     )
 
 
+def xva_history(start: date, end: date, frequency: str = "auto") -> XvaHistory:
+    """Desk totals per day: from the desk history file where it has been landed, otherwise summed from the
+    official counterparty values."""
+    if start > end:
+        raise DataNotAvailable("start must not be later than end.")
+    with db.connect(_store_path(), read_only=True) as con:
+        has_history = db.table_exists(con, "xva_desk_total")
+    rows: list[tuple] = []
+    basis = "Sum of official counterparty values"
+    if has_history:
+        rows = _rows(
+            "SELECT as_of, measure, value FROM xva_desk_total WHERE as_of BETWEEN ? AND ? ORDER BY as_of",
+            [start, end],
+        )
+        if rows:
+            basis = "Desk total history file (XVA system)"
+    if not rows:
+        rows = _rows(
+            """
+            SELECT as_of, measure, SUM(value) FROM xva_value WHERE as_of BETWEEN ? AND ?
+            GROUP BY as_of, measure ORDER BY as_of
+            """,
+            [start, end],
+        )
+    all_points = _points(rows)
+    if not all_points:
+        raise DataNotAvailable(f"No desk XVA totals between {start} and {end}.")
+    first, last = all_points[0], all_points[-1]
+    if frequency == "auto":
+        frequency = "daily" if len(all_points) <= 66 else "month_end"
+    points = all_points
+    if frequency == "month_end":
+        month_ends: dict[tuple[int, int], XvaPoint] = {}
+        for p in all_points:
+            month_ends[(p.as_of.year, p.as_of.month)] = p
+        points = list(month_ends.values())
+        if points[0].as_of != first.as_of:
+            points.insert(0, first)
+        basis += ", month-end points (plus the first date)"
+    d = dictionary()
+    return XvaHistory(
+        start=start,
+        end=end,
+        basis=basis,
+        points=points,
+        first=first,
+        last=last,
+        change=last.total - first.total,
+        provenance=Provenance(
+            source=basis,
+            as_of=last.as_of,
+            run_ids=[],
+            unit=d["reporting_currency"],
+            sign_convention=d["sign_convention"],
+            generated_at=_now(),
+        ),
+    )
+
+
 # ---------------------------------------------------------------- sensitivities
 
 
+def sensitivity_components() -> list[str]:
+    return list(dictionary().get("sensitivity_components") or ["XVA"])
+
+
 def sensitivities(
-    as_of: date, asset_class: str, measure: str, group_by: str, counterparty_id: str | None, top_n: int
+    as_of: date,
+    asset_class: str,
+    measure: str | None,
+    group_by: str,
+    counterparty_id: str | None,
+    top_n: int,
+    component: str | None = None,
 ) -> SensitivityReport:
     _require_date(as_of)
-    spec = dictionary()["sensitivities"].get(asset_class, {}).get(measure)
+    defined = dictionary()["sensitivities"].get(asset_class, {})
+    if not defined:
+        raise DataNotAvailable(f"No sensitivities are defined for {asset_class}. Defined: {', '.join(dictionary()['sensitivities'])}.")
+    measure = measure or next(iter(defined))
+    spec = defined.get(measure)
     if spec is None:
-        raise DataNotAvailable(f"No {measure} sensitivity is defined for {asset_class}.")
+        raise DataNotAvailable(f"No {measure} sensitivity is defined for {asset_class}. Use one of: {', '.join(defined)}.")
+    allowed = sensitivity_components()
+    component = (component or allowed[0]).upper()
+    if component not in allowed:
+        raise DataNotAvailable(f"Sensitivities are stored for {', '.join(allowed)}, not {component}.")
     key_expr, label_expr = _SENS_GROUP[group_by]
-    where = "s.as_of = ? AND s.asset_class = ? AND s.measure = ?"
-    params: list[Any] = [as_of, asset_class, measure]
+    where = "s.as_of = ? AND s.asset_class = ? AND s.measure = ? AND COALESCE(s.component, 'XVA') = ?"
+    params: list[Any] = [as_of, asset_class, measure, component]
     if counterparty_id:
         where += " AND s.counterparty_id = ?"
         params.append(counterparty_id)
@@ -288,6 +429,7 @@ def sensitivities(
         FROM xva_sensitivity s JOIN dim_counterparty c ON c.counterparty_id = s.counterparty_id
         WHERE {where}
         GROUP BY 1, 2
+        HAVING SUM(s.value) <> 0
     """
     rows = sorted(
         (SensRow(key=k, label=lbl, value=v) for k, lbl, v in _rows(sql, params)),
@@ -297,7 +439,8 @@ def sensitivities(
     return SensitivityReport(
         as_of=as_of,
         asset_class=asset_class,  # type: ignore[arg-type]
-        measure=measure,  # type: ignore[arg-type]
+        measure=measure,
+        component=component,
         group_by=group_by,  # type: ignore[arg-type]
         counterparty_id=counterparty_id,
         rows=rows[:top_n],
@@ -317,19 +460,19 @@ def pnl_attribution(start: date, end: date, level: str, key: str | None) -> PnlA
     _require_date(end)
     if level == "counterparty" and not key:
         raise DataNotAvailable("Counterparty level needs a counterparty_id.")
-    where, params = "", []
-    if key:
-        where = f" AND {_FILTER[level]} = ?"
-        params = [key]
+    params = [key] if key else []
+
+    def where(t: str) -> str:
+        return f" AND {_FILTER[level].format(t=t)} = ?" if key else ""
 
     values = _rows(
         f"""
         SELECT v.as_of, SUM(v.value)
         FROM xva_value v JOIN dim_counterparty c ON c.counterparty_id = v.counterparty_id
-        WHERE v.as_of IN (?, ?){where}
+        WHERE v.as_of IN (?, ?) AND v.measure IN ({db.placeholders(len(total_components()))}){where("v")}
         GROUP BY v.as_of
         """,
-        [start, end, *params],
+        [start, end, *total_components(), *params],
     )
     by_date = dict(values)
     if end not in by_date:
@@ -340,11 +483,16 @@ def pnl_attribution(start: date, end: date, level: str, key: str | None) -> PnlA
         f"""
         SELECT p.driver, SUM(p.value)
         FROM xva_pnl_explain p JOIN dim_counterparty c ON c.counterparty_id = p.counterparty_id
-        WHERE p.as_of > ? AND p.as_of <= ?{where}
+        WHERE p.as_of > ? AND p.as_of <= ?{where("p")}
         GROUP BY p.driver
         """,
         [start, end, *params],
     )
+    if not drivers:
+        raise DataNotAvailable(
+            f"No P&L explain is loaded for {start} to {end}. The change in total XVA is {xva_change:,.0f}; "
+            "use get_xva_movers for the change by counterparty or entity and component."
+        )
     order = list(dictionary()["pnl_drivers"])
     driver_rows = sorted(
         (DriverRow(driver=d, value=v) for d, v in drivers),
@@ -375,16 +523,18 @@ def pnl_attribution(start: date, end: date, level: str, key: str | None) -> PnlA
 def search_counterparties(query: str, limit: int) -> CounterpartySearch:
     rows = _rows(
         """
-        SELECT counterparty_id, name, rating, sector, region, book FROM dim_counterparty
-        WHERE counterparty_id = upper(?) OR lower(name) LIKE '%' || lower(?) || '%'
-        ORDER BY name LIMIT ?
+        SELECT counterparty_id, name, rating, sector, region, book, segment, credit_curve, customer_type, cpty_type
+        FROM dim_counterparty
+        WHERE upper(counterparty_id) LIKE upper(?) || '%' OR lower(name) LIKE '%' || lower(?) || '%'
+        ORDER BY counterparty_id LIMIT ?
         """,
         [query, query, limit],
     )
     return CounterpartySearch(
         query=query,
         matches=[
-            CounterpartyInfo(counterparty_id=r[0], name=r[1], rating=r[2], sector=r[3], region=r[4], book=r[5])
+            CounterpartyInfo(counterparty_id=r[0], name=r[1] or r[0], rating=r[2], sector=r[3], region=r[4], book=r[5],
+                             segment=r[6], credit_curve=r[7], customer_type=r[8], cpty_type=r[9])
             for r in rows
         ],
     )
@@ -397,7 +547,14 @@ def definition(term: str) -> DefinitionResult:
         "measures": d.get("measures", {}),
         "sensitivities": d.get("sensitivities", {}),
         "pnl_drivers": d.get("pnl_drivers", {}),
+        "entities": d.get("entities", {}),
+        "segments": d.get("segments", {}),
     }
+    for asset_class, measures in d.get("sensitivities", {}).items():  # e.g. "pv01" as well as "IR"
+        for name, entry in (measures or {}).items():
+            if name.lower() == t.lower():
+                return DefinitionResult(term=name, found=True, entry={"section": f"sensitivities.{asset_class}",
+                                                                      "value": entry})
     for section, entries in sections.items():
         for name, entry in entries.items():
             if name.lower() == t.lower():

@@ -18,7 +18,9 @@ from .models import (
     PnlAttribution,
     Provenance,
     SensitivityReport,
+    XvaHistory,
     XvaMovers,
+    XvaPoint,
     XvaSummary,
 )
 
@@ -28,6 +30,16 @@ def money(x: float | None) -> str:
         return ""
     whole = round(x)
     return f"{(whole or 0):,}"  # 'or 0' turns -0 into 0
+
+
+def num(x: float | None) -> str:
+    """Sensitivities: whole numbers when large, more decimals when small (FX gamma, vols)."""
+    if x is None:
+        return ""
+    a = abs(x)
+    if a >= 1000:
+        return money(x)
+    return f"{x:,.2f}" if a >= 1 else f"{x:,.4f}"
 
 
 def table(headers: Sequence[str], rows: Sequence[Sequence[Any]], numeric_from: int = 99) -> str:
@@ -60,48 +72,67 @@ def _status(r: DataStatus) -> str:
     return "\n".join([head, table(["Source", "Run", "Checks", "Notes"], rows), tail])
 
 
+def _names(components: dict[str, float]) -> list[str]:
+    return list(components)
+
+
 def _summary(r: XvaSummary) -> str:
-    rows = [(x.label, money(x.cva), money(x.dva), money(x.fva), money(x.total)) for x in r.rows]
+    names = _names(r.totals.components)
+    rows = [(x.label, *(money(x.components.get(n)) for n in names), money(x.total)) for x in r.rows]
     t = r.totals
-    rows.append(("Total (all groups)", money(t.cva), money(t.dva), money(t.fva), money(t.total)))
+    rows.append(("Total (all groups)", *(money(t.components.get(n)) for n in names), money(t.total)))
     note = " (top rows only)" if r.truncated else ""
     return "\n".join(
-        [f"XVA by {r.level} on {r.as_of}{note}", table([r.level.title(), "CVA", "DVA", "FVA", "Total"], rows, 1)]
+        [f"XVA by {r.level} on {r.as_of}{note}", table([r.level.title(), *names, "Total XVA"], rows, 1)]
     )
 
 
 def _movers(r: XvaMovers) -> str:
+    names = _names(r.rows[0].component_changes) if r.rows else []
     rows = [
-        (m.label, money(m.total_start), money(m.total_end), money(m.change), money(m.cva_change),
-         money(m.dva_change), money(m.fva_change))
+        (m.label, money(m.total_start), money(m.total_end), money(m.change),
+         *(money(m.component_changes.get(n)) for n in names))
         for m in r.rows
     ]
     note = " (largest first, top rows only)" if r.truncated else " (largest first)"
     return "\n".join(
         [
             f"XVA change by {r.level}, {r.start} to {r.end}{note}",
-            table([r.level.title(), str(r.start), str(r.end), "Change", "CVA chg", "DVA chg", "FVA chg"], rows, 1),
+            table([r.level.title(), str(r.start), str(r.end), "Change", *(f"{n} chg" for n in names)], rows, 1),
             f"Total change (all groups): {money(r.total_change)}",
         ]
     )
 
 
+def _point_rows(points: list[XvaPoint]) -> tuple[list[str], list[tuple]]:
+    names = _names(points[0].components) if points else []
+    return names, [(p.as_of, *(money(p.components.get(n)) for n in names), money(p.total)) for p in points]
+
+
 def _timeseries(r: CounterpartyTimeseries) -> str:
-    rows = [(p.as_of, money(p.cva), money(p.dva), money(p.fva), money(p.total)) for p in r.points]
+    names, rows = _point_rows(r.points)
     return "\n".join(
-        [f"Daily XVA for {r.name} ({r.counterparty_id})", table(["Date", "CVA", "DVA", "FVA", "Total"], rows, 1)]
+        [f"Daily XVA for {r.name} ({r.counterparty_id})", table(["Date", *names, "Total XVA"], rows, 1)]
     )
 
 
+def _history(r: XvaHistory) -> str:
+    names, rows = _point_rows(r.points)
+    lines = [f"Desk XVA {r.start} to {r.end} ({r.basis})", table(["Date", *names, "Total XVA"], rows, 1)]
+    if r.first and r.last:
+        lines.append(f"Change in total XVA from {r.first.as_of} to {r.last.as_of}: {money(r.change)}")
+    return "\n".join(lines)
+
+
 def _sens(r: SensitivityReport) -> str:
-    rows = [(x.label, money(x.value)) for x in r.rows]
+    rows = [(x.label, num(x.value)) for x in r.rows]
     scope = f" for {r.counterparty_id}" if r.counterparty_id else ""
     note = " (top rows only)" if r.truncated else ""
     return "\n".join(
         [
-            f"{r.asset_class} {r.measure} by {r.group_by}{scope} on {r.as_of}{note}",
+            f"{r.component} {r.asset_class} {r.measure} by {r.group_by}{scope} on {r.as_of}{note}",
             table([r.group_by.replace("_", " ").title(), "Value"], rows, 1),
-            f"Total: {money(r.total)}",
+            f"Total: {num(r.total)}",
         ]
     )
 
@@ -124,8 +155,10 @@ def _pnl(r: PnlAttribution) -> str:
 def _search(r: CounterpartySearch) -> str:
     if not r.matches:
         return f"No counterparty matches '{r.query}'."
-    rows = [(m.counterparty_id, m.name, m.rating, m.sector, m.region, m.book) for m in r.matches]
-    return table(["ID", "Name", "Rating", "Sector", "Region", "Book"], rows)
+    rows = [(m.counterparty_id, m.name, m.rating or "", m.credit_curve or "", m.customer_type or "",
+             m.cpty_type or "", m.segment or "", m.sector or "", m.book or "") for m in r.matches]
+    return table(["ID", "Name", "Rating", "Credit curve", "Customer type", "Cpty type", "Segment", "Sector", "Book"],
+                 rows)
 
 
 def _definition(r: DefinitionResult) -> str:
@@ -145,6 +178,7 @@ _RENDERERS = {
     XvaSummary: _summary,
     XvaMovers: _movers,
     CounterpartyTimeseries: _timeseries,
+    XvaHistory: _history,
     SensitivityReport: _sens,
     PnlAttribution: _pnl,
     CounterpartySearch: _search,

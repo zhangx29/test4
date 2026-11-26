@@ -1,0 +1,86 @@
+# Daily XVA CSV files from the desk's folder -> curated store. Used by:
+#   python -m xva_landing.load_desk_csv --config landing\desk_csv.yaml --store <store> --as-of 2026-11-24
+# Paths in single quotes keep the backslashes as typed.
+
+folder: '\\ibgmstorfile01\group1\CVA Desk\Limeng\Python\XVA CSV'
+dictionary: desk_dictionary.yaml   # relative to this file; the tools need XVA_DICTIONARY_PATH set to the same file
+source: xva_system                 # data_status source; must equal official_source in the dictionary
+default_desk: XVA Desk
+
+# COB_DATE text in the files. US month/day comes first; every file's dates are also checked against the
+# date in its file name, so a day/month mix-up is caught.
+date_formats: ['%m/%d/%Y %H:%M', '%m/%d/%Y %H:%M:%S', '%m/%d/%Y', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d', '%Y%m%d']
+
+tolerance: 1.0            # CAD; allowed difference in tie-outs (XVA column, control files, desk history)
+strict_tieouts: false     # true = a tie-out difference rejects the day; false = it is reported in status notes
+drop_zero_sensitivities: true   # zero cells are not stored (sums are unchanged; the store stays small)
+unmapped_columns: fail    # fail | ignore: what to do with a sensitivity column no rule below recognises
+
+values:                   # required every day
+  pattern: XVA_CVA_CVACO_DVACO_FVA_by_Cpty_{yyyymmdd}.csv
+  id_columns: {as_of: COB_DATE, legal_entity: INTERNAL_ENTITY, counterparty_id: CPTY_CODE}
+  components: [CVA, CVACO, DVACO, FVA]   # one column each; names must be measures in the dictionary
+  total_column: XVA                      # checked against the dictionary's in_total components
+
+sensitivities:            # optional; each file is one XVA component
+  id_columns: {as_of: COB_DATE, legal_entity: INTERNAL_ENTITY, counterparty_id: CPTY_CODE}
+  files:
+    - {pattern: 'CVA_Sens_{yyyymmdd}.csv', component: CVA, control: 'CVA_Sens_Cons_{yyyymmdd}.csv'}
+    - {pattern: 'FVA_Sens_{yyyymmdd}.csv', component: FVA, control: 'FVA_Sens_Cons_{yyyymmdd}.csv'}
+    - {pattern: 'XVA_Sens_{yyyymmdd}.csv', component: XVA, control: 'XVA_Sens_Cons_{yyyymmdd}.csv'}
+  sum_check: {XVA: [CVA, FVA]}           # per column, XVA_Sens = CVA_Sens + FVA_Sens
+  columns:                               # first matching rule wins; {name} copies a named group from the regex
+    # Interest rates: CCY_PV01 is the parallel shift, CCY_PV01_<tenor> the tenor points (also CORRASOFR basis)
+    - {regex: '^(?P<curve>[A-Z]+)_PV01$', asset_class: IR, risk_factor: '{curve}', measure: pv01_parallel}
+    - {regex: '^(?P<curve>[A-Z]+)_PV01_(?P<tenor>\d+(?:MO|YR))$', asset_class: IR, risk_factor: '{curve}',
+       bucket: '{tenor}', measure: pv01}
+    - {regex: '^(?P<ccy>[A-Z]{3})_IR_VOL$', asset_class: IR, risk_factor: '{ccy}', measure: vega}
+    # FX: spot delta, vol, gamma (up/down) and gamma cross terms (_CAD01 / _USD01)
+    - {regex: '^(?P<pair>[A-Z]{6})_SPOT$', asset_class: FX, risk_factor: '{pair}', measure: delta}
+    - {regex: '^(?P<pair>[A-Z]{6})_VOL$', asset_class: FX, risk_factor: '{pair}', measure: vega}
+    - {regex: '^(?P<pair>[A-Z]{6})_UPGAMMA$', asset_class: FX, risk_factor: '{pair}', measure: gamma_up}
+    - {regex: '^(?P<pair>[A-Z]{6})_DNGAMMA$', asset_class: FX, risk_factor: '{pair}', measure: gamma_down}
+    - {regex: '^(?P<pair>[A-Z]{6})_UPGAMMA_(?P<x>[A-Z]{3}01)$', asset_class: FX, risk_factor: '{pair}',
+       bucket: '{x}', measure: gamma_up_x}
+    - {regex: '^(?P<pair>[A-Z]{6})_DNGAMMA_(?P<x>[A-Z]{3}01)$', asset_class: FX, risk_factor: '{pair}',
+       bucket: '{x}', measure: gamma_down_x}
+    # Commodities: <name>[_BASIS]_DELTA_PARALLEL, _BAL<n>YR / _BALMAX buckets, and NG_DELTA_LAG
+    - {regex: '^(?P<cmd>[A-Z]+(?:_BASIS)?)_DELTA_PARALLEL$', asset_class: CO, risk_factor: '{cmd}',
+       measure: delta_parallel}
+    - {regex: '^(?P<cmd>[A-Z]+(?:_BASIS)?)_DELTA_(?P<b>BAL\d+YR|BALMAX)$', asset_class: CO, risk_factor: '{cmd}',
+       bucket: '{b}', measure: delta}
+    - {regex: '^(?P<cmd>[A-Z]+)_DELTA_LAG$', asset_class: CO, risk_factor: '{cmd}', measure: delta_lag}
+    # Precious metals: _FX_PARALLEL = spot (FX-style) delta, _PARALLEL = forward curve parallel shift
+    - {regex: '^(?P<m>XAU|XAG|XPD|XPT)_FX_PARALLEL$', asset_class: CO, risk_factor: '{m}', measure: spot_delta}
+    - {regex: '^(?P<m>XAU|XAG|XPD|XPT)_PARALLEL$', asset_class: CO, risk_factor: '{m}', measure: delta_parallel}
+    # Equity and carry
+    - {regex: '^EQ_DELTA$', asset_class: EQ, risk_factor: EQ, measure: delta}
+    - {regex: '^CARRY_1D$', asset_class: CARRY, risk_factor: CARRY, measure: carry_1d}
+
+credit_spreads:           # optional; XVA_ALL01: one row per counterparty, no date or entity column
+  pattern: XVA_ALL01_{yyyymmdd}.csv
+  component: XVA          # sensitivities of total XVA
+  id_columns: {counterparty_id: CPTY_CODE}
+  attributes:             # file column -> counterparty attribute (latest loaded date wins)
+    RATING: rating
+    CREDIT_CURVE: credit_curve
+    CUSTOMER_TYPE: customer_type
+    CPTY_TYPE: cpty_type
+  curve:                  # the counterparty's credit spread curve levels, one column per tenor in months
+    regex: '^MTH(?P<months>\d+)$'
+  columns:
+    - {regex: '^(?P<curve>BMO_CASH|BMO_CDS|CPTY_CDS)_Parallel$', asset_class: CR, risk_factor: '{curve}',
+       measure: cs01_parallel}
+    - {regex: '^(?P<curve>BMO_CASH|BMO_CDS|CPTY_CDS)_(?P<tenor>\d+m)$', asset_class: CR, risk_factor: '{curve}',
+       bucket: '{tenor}', measure: cs01}
+    - {regex: '^CPTY_CR01_1pct$', asset_class: CR, risk_factor: CPTY_CDS, measure: cr01_1pct}
+
+ssa:                      # optional; tags the counterparties listed here with segment SSA
+  pattern: XVA_CVA_CVACO_DVACO_FVA_SSA_{yyyymmdd}.csv
+  id_column: CPTY_CODE
+
+history:                  # optional; desk totals for every date from the start date to the file date
+  pattern: XVA_CVA_CVACO_DVACO_FVA_[0-9]*_{yyyymmdd}.csv
+  date_column: COB_DATE
+  components: [CVA, CVACO, DVACO, FVA]
+  total_column: XVA

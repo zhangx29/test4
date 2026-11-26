@@ -9,6 +9,7 @@ EXPECTED_TOOLS = {
     "get_xva_movers",
     "get_counterparty_xva_timeseries",
     "get_xva_sensitivities",
+    "get_xva_history",
     "get_pnl_attribution",
     "search_counterparties",
     "get_definition",

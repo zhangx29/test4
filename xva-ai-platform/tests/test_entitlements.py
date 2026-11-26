@@ -9,7 +9,7 @@ def test_exec_sees_desk_and_book_only(call, monkeypatch):
     monkeypatch.setenv("XVA_DEV_ROLE", "xva-exec")
     assert not call("get_xva_summary", {"as_of": "2026-11-19", "level": "book"}).isError
     denied = call("get_xva_summary", {"as_of": "2026-11-19", "level": "counterparty"})
-    assert denied.isError and "desk or book" in denied.content[0].text
+    assert denied.isError and "desk, entity or book" in denied.content[0].text
 
 
 def test_exec_cannot_reach_counterparty_detail_by_other_routes(call, monkeypatch):

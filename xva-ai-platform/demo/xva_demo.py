@@ -139,12 +139,14 @@ async def run(store_path: Path, audit_path: Path, server_log: Path, pause: bool)
                                {"asset_class": "IR", "measure": "delta", "group_by": "bucket", "as_of": start,
                                 "top_n": 8})
 
-        banner("Part 2 - Executive (role xva-exec): desk and book level only")
+        banner("Part 2 - Executive (role xva-exec): desk, entity and book level only")
         async with stdio_client(server_params(store_path, audit_path, "xva-exec"), errlog=errlog) as (r, w):
             async with ClientSession(r, w) as session:
                 await session.initialize()
                 await demo.ask(session, f"Give me XVA by desk for {start}", "get_xva_summary",
                                {"as_of": start, "level": "desk"})
+                await demo.ask(session, "How has desk XVA moved this month?", "get_xva_history",
+                               {"start": dates[-1].replace(day=1).isoformat(), "end": end})
                 await demo.ask(session, "Which counterparties moved the most?", "get_xva_movers",
                                {"start": start, "end": end, "level": "counterparty", "top_n": 5})
                 await demo.ask(session, "Find the Maple Leaf counterparty", "search_counterparties",

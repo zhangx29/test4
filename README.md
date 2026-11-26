@@ -15,7 +15,7 @@ Companion to the guide "XVA Desk AI Workflow on GitHub Copilot (VS Code): Setup 
 cd xva-ai-platform
 python -m pip install -e ".[dev]"
 python sample_data/make_sample_data.py sample_data/xva_store.sqlite
-pytest                                   # with mcp + duckdb: 65 passed, 1 skipped (OpenAPI validator, optional)
+pytest                                   # with mcp + duckdb: 91 passed, 1 skipped (OpenAPI validator, optional)
                                          # without duckdb the DuckDB checks skip; without mcp the server tests skip
 python demo/xva_demo.py --pause          # live demo through a real MCP server process (no VS Code needed)
 
@@ -90,8 +90,8 @@ To try it in the sandbox, add the environment to `.vscode\settings.json`:
 {
   "terminal.integrated.env.windows": {
     "XVA_ENV": "dev",
-    "XVA_STORE_PATH": "C:\\dev\\xva-copilot-starter\\xva-ai-platform\\sample_data\\xva_store.duckdb",
-    "XVA_AUDIT_LOG": "C:\\dev\\xva-sandbox\\outputs\\audit.jsonl"
+    "XVA_STORE_PATH": "C:\\BMOdev\\xva-copilot-starter\\xva-ai-platform\\sample_data\\xva_store.duckdb",
+    "XVA_AUDIT_LOG": "C:\\BMOdev\\xva-sandbox\\outputs\\audit.jsonl"
   }
 }
 ```
@@ -133,6 +133,53 @@ python -m xva_mcp.rest --export-openapi openapi.json
 - **Microsoft 365 Copilot API plugin:** in Microsoft 365 Agents Toolkit, create a declarative agent and add an action from this OpenAPI description. The toolkit generates the plugin manifest. Set up sign-in as an Entra SSO or OAuth registration in the toolkit, and reuse `xva-ai-marketplace/m365/xva-analyst.instructions.md` as the agent's instructions.
 - **Copilot Studio:** add the API as a REST API tool or custom connector from the same file. If the import asks for OpenAPI 2.0 (Swagger), convert the file first.
 - **The bank's AI platform:** most platforms that support function calling accept an OpenAPI file or a list of operations; the descriptions and parameter documentation are written for a model to read.
+
+## Real data: landing your extracts
+
+The tools read four tables: counterparties, XVA values, sensitivities and P&L explain. `xva_landing.land_extract` loads them from CSV or Excel files with your own column names, mapped in `landing/landing_config.yaml`. Wide files (one column per measure or driver), label translation and thousands scaling are configured there too. Copy `landing/landing_config.example.yaml` to start. `landing/templates/` holds example files in the store's own layout.
+
+```bat
+python -m xva_landing.schema --store C:\xva_data\store\xva_store.duckdb
+python -m xva_landing.land_extract --config landing\landing_config.yaml --store C:\xva_data\store\xva_store.duckdb ^
+  counterparties --file C:\xva_data\inbox\2026-11-20\counterparties.csv
+python -m xva_landing.land_extract --config landing\landing_config.yaml --store C:\xva_data\store\xva_store.duckdb ^
+  --archive C:\xva_data\archive xva --as-of 2026-11-20 --values ...\xva_values.csv --sens ...\sensitivities.csv ^
+  --pnl ...\pnl_explain.csv --control values=<total from the official report>
+```
+
+Checks before anything is written: required columns, dates match `--as-of`, numbers parse, no Excel errors, known measures, drivers and sensitivity types, every counterparty in the counterparty table, no duplicate rows, and optional control totals. A rejected file loads nothing and its reasons appear in `status`. Exit codes: 0 loaded, 1 rejected, 2 setup problem.
+
+Each date has one official run per source, recorded in `data_status`; the tools read only that run. Re-running the same files is harmless. Loading new files for a date is a restatement: the new run becomes official, and the old rows stay for audit. A restatement that fails its checks leaves the old run official and records the rejection. `--archive` keeps a copy of every input file with its hash, and `landing_log` records who loaded what.
+
+Set `expected_sources` and `official_source` in `src/xva_mcp/dictionary.yaml` to the sources you actually land, or every date will show sources as missing. Stored procedures: add them to `ALLOWED` in `land_stored_procs.py` and export with `python -m xva_landing.land_stored_procs --proc ... --param as_of=... --out file.csv` (needs `pyodbc` and a read-only login in `XVA_SQL_CONN`). `landing/daily_load.example.bat` chains the daily steps for Task Scheduler.
+
+Limitation: books come from each counterparty's book in the counterparty table. If a counterparty trades in several books, book totals need a netting-set-to-book mapping, which is a later change.
+
+## The desk's daily XVA CSV files
+
+`xva_landing.load_desk_csv` loads the files in the desk's XVA CSV folder one business date at a time. `landing/desk_csv.yaml` describes them (folder, file names, columns), and `landing/desk_dictionary.yaml` defines the desk's components and sensitivities.
+
+| File | What is loaded | Checks |
+| --- | --- | --- |
+| `XVA_CVA_CVACO_DVACO_FVA_by_Cpty_yyyymmdd` (required) | CVA, CVACO, DVACO, FVA per legal entity and counterparty | COB_DATE = file date; numbers; no duplicate entity/counterparty; XVA = CVA + DVACO + FVA on every row |
+| `CVA_Sens`, `FVA_Sens`, `XVA_Sens_yyyymmdd` | Per component (CVA, FVA, XVA): IR PV01 by tenor (`pv01`) and parallel (`pv01_parallel`, incl. CORRASOFR basis), IR vega; FX spot delta, vega, up/down gamma and gamma cross terms; commodity deltas by balance-of-year bucket and parallel (AECO, NG incl. LAG, OIL, NWROC, WCS, NGL, NBP, AL, CA), precious metals; EQ delta; `CARRY_1D` | Every column matches a rule; column totals = the `_Cons_` file; XVA = CVA + FVA per column |
+| `XVA_ALL01_yyyymmdd` | Credit spread CS01 (BMO cash, BMO CDS, counterparty CDS) by tenor and parallel; `CPTY_CR01_1pct`; counterparty RATING, CREDIT_CURVE, CUSTOMER_TYPE, CPTY_TYPE (shown by `search_counterparties`); the spread curve MTH6–MTH600 (table `xva_cpty_curve`) | Every column matches a rule |
+| `XVA_CVA_CVACO_DVACO_FVA_SSA_yyyymmdd` | Tags those counterparties with segment SSA | |
+| `XVA_CVA_CVACO_DVACO_FVA_<start>_yyyymmdd` | Desk totals for every date in the file (for `get_xva_history`) | XVA = CVA + DVACO + FVA; the day's total = the counterparty file |
+
+Values files and column rules must pass, or the day is rejected and nothing is loaded. Tie-outs against the control, history and sum files are reported in `status` notes; set `strict_tieouts: true` to make them reject the day. Counterparties are added automatically with their code as the name, until a counterparty static file is landed with `land_extract counterparties`. Zero sensitivities aren't stored. Use DuckDB for this volume.
+
+```bat
+cd C:\BMOdev\xva-copilot-starter\xva-ai-platform
+set XVA_DICTIONARY_PATH=%CD%\landing\desk_dictionary.yaml
+python -m xva_landing.load_desk_csv --config landing\desk_csv.yaml --store %USERPROFILE%\xva_data\store\xva_store.duckdb --list
+python -m xva_landing.load_desk_csv --config landing\desk_csv.yaml --store %USERPROFILE%\xva_data\store\xva_store.duckdb --as-of 2026-11-24
+python -m xva_landing.load_desk_csv --config landing\desk_csv.yaml --store %USERPROFILE%\xva_data\store\xva_store.duckdb --all --archive %USERPROFILE%\xva_data\archive
+```
+
+`--from 2026-11-01 --to 2026-11-24` loads a range, `--reload` reloads dates already loaded, and `--values-only` loads a day whose sensitivity files are broken. `landing/daily_load_desk.example.bat` is the daily job. Everything that reads this store (command line, MCP server, REST API, the VS Code terminal) needs `XVA_DICTIONARY_PATH` set to `landing\desk_dictionary.yaml`. To try it without real data: `python sample_data\make_desk_files.py C:\temp\xva_csv_sample 2026-11-23 2026-11-24` writes fictional files in the same layout, then add `--folder C:\temp\xva_csv_sample`.
+
+New in the tools: an `entity` level (legal entity) for summaries, movers and P&L; `component` on `get_xva_sensitivities` (XVA, CVA or FVA); and `get_xva_history` for desk totals over time (`xva-cli history`). Totals add only the components marked `in_total` in the dictionary.
 
 ## Try the tools in VS Code with sample data
 

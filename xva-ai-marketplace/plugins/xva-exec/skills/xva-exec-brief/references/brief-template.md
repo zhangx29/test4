@@ -9,11 +9,11 @@
 - **Where:** <book> carries <share>% of total XVA.
 - **Risk:** a 1bp rise in rates changes XVA by <IR delta total>k; a 1bp widening in counterparty spreads by <CS01 total>k.
 
-| | CVA | DVA | FVA | Total |
-| --- | ---: | ---: | ---: | ---: |
-| <book 1> | | | | |
-| <book 2> | | | | |
-| Desk | | | | |
+| | <one column per component the tool returns> | Total XVA |
+| --- | ---: | ---: |
+| <entity or book 1> | | |
+| <entity or book 2> | | |
+| Desk | | |
 
 Source: <provenance line> · CAD thousands
 ```

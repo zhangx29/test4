@@ -1,0 +1,6 @@
+as_of,counterparty_id,asset_class,risk_factor,bucket,measure,value
+2026-11-20,CP900,IR,CAD-CORRA,5Y,delta,-420.50
+2026-11-20,CP900,IR,CAD-CORRA,10Y,delta,-310.25
+2026-11-20,CP900,CR,CP900-CDS,5Y,cs01,-980.00
+2026-11-20,CP901,IR,CAD-CORRA,5Y,delta,-95.10
+2026-11-20,CP901,FX,USDCAD,,delta,1200.00

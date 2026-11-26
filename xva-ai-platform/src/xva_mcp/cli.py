@@ -37,6 +37,7 @@ COMMANDS: dict[str, str] = {
     "movers": "get_xva_movers",
     "timeseries": "get_counterparty_xva_timeseries",
     "sens": "get_xva_sensitivities",
+    "history": "get_xva_history",
     "pnl": "get_pnl_attribution",
     "search": "search_counterparties",
     "define": "get_definition",

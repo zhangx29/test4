@@ -22,6 +22,7 @@ if _SRC.is_dir() and str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 from xva_mcp import db  # noqa: E402
+from xva_landing.schema import ensure_schema  # noqa: E402
 
 START, END = date(2026, 9, 30), date(2026, 11, 20)
 MODEL_CHANGE_DAY = date(2026, 11, 2)
@@ -96,28 +97,10 @@ def build(path: str | Path) -> Path:
 
 
 def _write(con: db.Connection, rng: random.Random, days: list[date]) -> None:
-    con.execute(
-        "CREATE TABLE dim_counterparty (counterparty_id VARCHAR PRIMARY KEY, name VARCHAR, rating VARCHAR, "
-        "sector VARCHAR, region VARCHAR, desk VARCHAR, book VARCHAR)"
-    )
-    con.execute(
-        "CREATE TABLE xva_value (as_of DATE, run_id VARCHAR, counterparty_id VARCHAR, netting_set_id VARCHAR, "
-        "measure VARCHAR, value DOUBLE, unit VARCHAR)"
-    )
-    con.execute(
-        "CREATE TABLE xva_pnl_explain (as_of DATE, run_id VARCHAR, counterparty_id VARCHAR, measure VARCHAR, "
-        "driver VARCHAR, value DOUBLE, unit VARCHAR)"
-    )
-    con.execute(
-        "CREATE TABLE xva_sensitivity (as_of DATE, run_id VARCHAR, counterparty_id VARCHAR, asset_class VARCHAR, "
-        "risk_factor VARCHAR, bucket VARCHAR, measure VARCHAR, value DOUBLE, unit VARCHAR)"
-    )
-    con.execute(
-        "CREATE TABLE data_status (as_of DATE, source VARCHAR, run_id VARCHAR, loaded_at TIMESTAMPTZ, "
-        "checks_passed BOOLEAN, notes VARCHAR)"
-    )
+    ensure_schema(con)
     con.executemany(
-        "INSERT INTO dim_counterparty VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO dim_counterparty (counterparty_id, name, rating, sector, region, desk, book) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
         [(i, n, r, s, reg, DESK, b) for i, n, r, s, reg, b in COUNTERPARTIES],
     )
 
@@ -169,9 +152,9 @@ def _write(con: db.Connection, rng: random.Random, days: list[date]) -> None:
         ]
 
     with con.transaction():
-        con.executemany("INSERT INTO xva_value VALUES (?, ?, ?, ?, ?, ?, ?)", values)
-        con.executemany("INSERT INTO xva_pnl_explain VALUES (?, ?, ?, ?, ?, ?, ?)", explains)
-        con.executemany("INSERT INTO xva_sensitivity VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", sens)
+        con.executemany("INSERT INTO xva_value (as_of, run_id, counterparty_id, netting_set_id, measure, value, unit) VALUES (?, ?, ?, ?, ?, ?, ?)", values)
+        con.executemany("INSERT INTO xva_pnl_explain (as_of, run_id, counterparty_id, measure, driver, value, unit) VALUES (?, ?, ?, ?, ?, ?, ?)", explains)
+        con.executemany("INSERT INTO xva_sensitivity (as_of, run_id, counterparty_id, asset_class, risk_factor, bucket, measure, value, unit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", sens)
         con.executemany("INSERT INTO data_status VALUES (?, ?, ?, ?, ?, ?)", status)
 
 

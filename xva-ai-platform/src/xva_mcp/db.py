@@ -77,6 +77,9 @@ def _register_sqlite_converters() -> None:
     _converters_registered = True
 
 
+_NULL = "\\N"
+
+
 def _sqlite_value(v: Any) -> Any:
     if isinstance(v, datetime):
         return v.isoformat()
@@ -103,6 +106,35 @@ class Connection:
 
     def executemany(self, sql: str, rows: Iterable[Sequence[Any]]) -> None:
         self.raw.executemany(sql, [self._params(r) for r in rows])
+
+    def bulk_insert(self, table: str, columns: Sequence[str], rows: Iterable[Sequence[Any]]) -> int:
+        """Insert many rows fast. DuckDB inserts row by row slowly through executemany, so rows go through a
+        temporary CSV file and COPY; SQLite uses executemany. Returns the number of rows."""
+        rows = list(rows)
+        if not rows:
+            return 0
+        if self.backend != "duckdb":
+            sql = f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders(len(columns))})"
+            self.executemany(sql, rows)
+            return len(rows)
+        import csv
+        import os
+        import tempfile
+
+        fd, tmp = tempfile.mkstemp(suffix=".csv", prefix="xva_bulk_")
+        try:
+            with os.fdopen(fd, "w", newline="", encoding="utf-8") as fh:
+                w = csv.writer(fh)
+                w.writerow(columns)
+                for r in rows:
+                    w.writerow([_NULL if v is None else _sqlite_value(v) for v in r])
+            path = tmp.replace("\\", "/").replace("'", "''")
+            self.raw.execute(
+                f"COPY {table} ({', '.join(columns)}) FROM '{path}' (FORMAT csv, HEADER true, NULLSTR '{_NULL}')"
+            )
+        finally:
+            os.remove(tmp)
+        return len(rows)
 
     @contextmanager
     def transaction(self) -> Iterator["Connection"]:
@@ -147,3 +179,17 @@ def placeholders(n: int) -> str:
     if n < 1:
         raise ValueError("An IN list needs at least one value.")
     return ", ".join("?" for _ in range(n))
+
+
+def table_exists(con: Connection, name: str) -> bool:
+    if con.backend == "duckdb":
+        sql = "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = ?"
+    else:
+        sql = "SELECT COUNT(*) FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?"
+    return bool(con.execute(sql, [name]).fetchone()[0])
+
+
+def table_columns(con: Connection, name: str) -> list[str]:
+    """Column names of a table (PRAGMA table_info works on both backends)."""
+    return [r[1] for r in con.raw.execute(f"PRAGMA table_info('{name}')").fetchall()]
+

@@ -27,7 +27,7 @@ from .models import (
     Level,
     PnlAttribution,
     SensitivityReport,
-    SensMeasure,
+    XvaHistory,
     XvaMovers,
     XvaSummary,
 )
@@ -53,7 +53,8 @@ T = TypeVar("T")
 INSTRUCTIONS = (
     "Official XVA figures for the XVA desk. Every result includes provenance (source, as-of date, run IDs, "
     "unit, sign convention): cite it. Call get_data_status before reporting figures for a date. "
-    "Do not compute XVA yourself; use get_xva_movers and get_pnl_attribution for changes."
+    "Do not compute XVA yourself; use get_xva_movers, get_xva_history and get_pnl_attribution for changes. "
+    "XVA components and which of them add into total XVA are in the data dictionary (get_definition)."
 )
 TopN = Annotated[int, Field(ge=1, le=200, description="Maximum rows to return (1-200)")]
 
@@ -65,22 +66,44 @@ AsOf = Annotated[
 ]
 Start = Annotated[date, Field(description="Earlier business date, YYYY-MM-DD")]
 End = Annotated[date, Field(description="Later business date, YYYY-MM-DD")]
-LevelArg = Annotated[Level, Field(description="Grouping: desk, book or counterparty")]
+LevelArg = Annotated[
+    Level, Field(description="Grouping: desk, entity (legal entity, e.g. BMO, BCMC), book or counterparty")
+]
 CounterpartyId = Annotated[
     str, Field(min_length=2, max_length=40, description="Counterparty ID, e.g. CP001; find it with search_counterparties")
 ]
 OptionalCounterpartyId = Annotated[
     str | None, Field(max_length=40, description="Limit to one counterparty ID (optional)")
 ]
-AssetClassArg = Annotated[AssetClass, Field(description="Asset class: IR, FX, EQ, CO or CR")]
-SensMeasureArg = Annotated[SensMeasure, Field(description="delta (IR, FX, EQ, CO), vega (IR) or cs01 (CR)")]
+AssetClassArg = Annotated[
+    AssetClass, Field(description="Asset class: IR, FX, EQ, CO (commodities), CR (credit spreads) or CARRY")
+]
+SensMeasureArg = Annotated[
+    str | None,
+    Field(
+        max_length=30,
+        description="Sensitivity measure as named in the data dictionary, e.g. pv01 or pv01_parallel (IR), "
+        "cs01 or cs01_parallel (CR). Omit for the asset class's first measure.",
+    ),
+]
+SensComponent = Annotated[
+    str | None,
+    Field(max_length=10, description="Which XVA component the sensitivity is of, e.g. XVA (default), CVA or FVA"),
+]
 SensGroup = Annotated[
-    Literal["counterparty", "risk_factor", "bucket"],
-    Field(description="Group by counterparty, risk_factor, or bucket (risk factor + tenor)"),
+    Literal["counterparty", "entity", "risk_factor", "bucket"],
+    Field(description="Group by counterparty, entity (legal entity), risk_factor, or bucket (risk factor + tenor)"),
+]
+Frequency = Annotated[
+    Literal["auto", "daily", "month_end"],
+    Field(description="daily, month_end, or auto (daily up to about three months, month-end beyond)"),
 ]
 ScopeKey = Annotated[
     str | None,
-    Field(max_length=80, description="Desk name, book name or counterparty ID matching level; omit for the whole desk"),
+    Field(
+        max_length=80,
+        description="Desk name, legal entity, book name or counterparty ID matching level; omit for the whole desk",
+    ),
 ]
 Query = Annotated[str, Field(min_length=2, max_length=80, description="Counterparty ID or part of its name")]
 Limit = Annotated[int, Field(ge=1, le=50, description="Maximum matches to return (1-50)")]
@@ -195,15 +218,17 @@ def get_counterparty_xva_timeseries(
 
 def get_xva_sensitivities(
     asset_class: AssetClassArg,
-    measure: SensMeasureArg = "delta",
+    measure: SensMeasureArg = None,
     group_by: SensGroup = "risk_factor",
     as_of: AsOf = None,
     counterparty_id: OptionalCounterpartyId = None,
     top_n: TopN = 20,
+    component: SensComponent = None,
 ) -> SensitivityReport:
-    """XVA sensitivities for one asset class (IR, FX, EQ, CO, CR). Measures: delta (IR, FX, EQ, CO),
-    vega (IR), cs01 (CR). Group by counterparty, risk factor or risk factor + tenor bucket.
-    The unit is in provenance.unit."""
+    """XVA sensitivities for one asset class (IR, FX, EQ, CO, CR, CARRY), of one XVA component (XVA by default, or
+    CVA or FVA where stored). Measures and units are in the data dictionary, e.g. pv01 by tenor or
+    pv01_parallel for IR, cs01 for credit spreads. Group by counterparty, legal entity, risk factor or
+    risk factor + tenor bucket. The unit is in provenance.unit. Never add parallel and tenor measures together."""
     d = _default_date(as_of)
     level = "counterparty" if group_by == "counterparty" else "desk"
     return _guarded(
@@ -215,10 +240,24 @@ def get_xva_sensitivities(
             "group_by": group_by,
             "counterparty_id": counterparty_id,
             "top_n": top_n,
+            "component": component,
         },
-        lambda: store.sensitivities(d, asset_class, measure, group_by, counterparty_id, top_n),
+        lambda: store.sensitivities(d, asset_class, measure, group_by, counterparty_id, top_n, component),
         level=level,
         counterparty_id=counterparty_id,
+    )
+
+
+def get_xva_history(start: Start, end: End, frequency: Frequency = "auto") -> XvaHistory:
+    """Desk-level XVA totals over time (all components and total XVA), for trends such as year-to-date or
+    since a given date. Long ranges come back as month-end points unless frequency=daily. Includes the change
+    in total XVA from the first to the last point. Desk level only; use get_counterparty_xva_timeseries for
+    one counterparty."""
+    return _guarded(
+        "get_xva_history",
+        {"start": start, "end": end, "frequency": frequency},
+        lambda: store.xva_history(start, end, frequency),
+        level="desk",
     )
 
 
@@ -267,6 +306,7 @@ TOOLS: list[Callable[..., Any]] = [
     get_xva_movers,
     get_counterparty_xva_timeseries,
     get_xva_sensitivities,
+    get_xva_history,
     get_pnl_attribution,
     search_counterparties,
     get_definition,

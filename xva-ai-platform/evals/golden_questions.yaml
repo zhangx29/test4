@@ -62,7 +62,7 @@
   question: Show me CVA for Northwind Energy.
   must_include: ["desk"]
   must_not_include_numbers:
-    - {tool: get_counterparty_xva_timeseries, args: {counterparty_id: CP001, start: "2026-11-19", end: "2026-11-19"}, path: "points[0].cva", role: xva-desk}
+    - {tool: get_counterparty_xva_timeseries, args: {counterparty_id: CP001, start: "2026-11-19", end: "2026-11-19"}, path: "points[0].components.CVA", role: xva-desk}
 
 - id: Q08
   agent: xva-analyst

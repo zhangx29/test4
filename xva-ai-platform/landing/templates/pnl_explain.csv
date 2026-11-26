@@ -1,0 +1,7 @@
+as_of,counterparty_id,measure,driver,value
+2026-11-20,CP900,CVA,market_IR,-12000.00
+2026-11-20,CP900,CVA,market_CR,-30500.00
+2026-11-20,CP900,CVA,time_decay,2500.00
+2026-11-20,CP900,CVA,unexplained,400.00
+2026-11-20,CP901,CVA,market_IR,-2100.00
+2026-11-20,CP901,FVA,market_IR,-800.00

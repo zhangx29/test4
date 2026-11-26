@@ -31,6 +31,7 @@ from .tools import (  # noqa: F401  (re-exported: the tools were defined here be
     get_data_status,
     get_definition,
     get_pnl_attribution,
+    get_xva_history,
     get_xva_movers,
     get_xva_sensitivities,
     get_xva_summary,
