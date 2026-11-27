@@ -298,6 +298,7 @@ def test_command_line_with_a_python_backend(desk, tmp_path, capsys):
     conf = tmp / "desk_csv.yaml"
     conf.write_text(CONFIG.read_text(encoding="utf-8")
                     .replace("stored_procs: stored_procs.yaml", f"stored_procs: '{reg}'")
+                    .replace("mapping: variants.yaml", f"mapping: '{ROOT / 'landing' / 'variants.yaml'}'")
                     .replace("dictionary: desk_dictionary.yaml", f"dictionary: '{ROOT / 'landing' / 'desk_dictionary.yaml'}'")
                     .replace("sp_output_folder: '%USERPROFILE%\\xva_data\\sp_output'", f"sp_output_folder: '{tmp / 'spo'}'"),
                     encoding="utf-8")

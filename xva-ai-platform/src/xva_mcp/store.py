@@ -30,6 +30,10 @@ from .models import (
     SensitivityReport,
     SensRow,
     SourceStatus,
+    VariantComparison,
+    VariantPnlRow,
+    VariantSensRow,
+    VariantValueRow,
     XvaHistory,
     XvaMovers,
     XvaPoint,
@@ -176,7 +180,7 @@ def data_status(as_of: date) -> DataStatus:
     missing = [s for s in expected if s not in present]
     return DataStatus(
         as_of=as_of,
-        all_passed=not missing and all(s.checks_passed for s in sources),
+        all_passed=not missing and all(s.checks_passed for s in sources if s.source in expected),
         sources=sources,
         missing_sources=missing,
         previous_business_date=previous_business_date(as_of),
@@ -245,7 +249,8 @@ def _summary_rows(as_of: date, level: str) -> list[XvaRow]:
         XvaRow(key=key, label=label, components=_ordered(vals), total=_total(vals))
         for (key, label), vals in grouped.items()
     ]
-    return sorted(out, key=lambda r: abs(r.total), reverse=True)
+    # ties (e.g. zero totals) in key order, so the answer doesn't depend on the database's row order
+    return sorted(sorted(out, key=lambda r: r.key), key=lambda r: abs(r.total), reverse=True)
 
 
 def _total_row(rows: list[XvaRow], label: str = "Total") -> XvaRow:
@@ -287,6 +292,7 @@ def xva_movers(start: date, end: date, level: str, top_n: int) -> XvaMovers:
                 component_changes={m: a.components.get(m, 0.0) - b.components.get(m, 0.0) for m in components()},
             )
         )
+    movers.sort(key=lambda m: m.key)
     movers.sort(key=lambda m: abs(m.change), reverse=True)
     return XvaMovers(
         start=start,
@@ -432,7 +438,7 @@ def sensitivities(
         HAVING SUM(s.value) <> 0
     """
     rows = sorted(
-        (SensRow(key=k, label=lbl, value=v) for k, lbl, v in _rows(sql, params)),
+        sorted((SensRow(key=k, label=lbl, value=v) for k, lbl, v in _rows(sql, params)), key=lambda r: r.key),
         key=lambda r: abs(r.value),
         reverse=True,
     )
@@ -618,3 +624,145 @@ def definition(term: str) -> DefinitionResult:
             return DefinitionResult(term=name, found=True, entry={"section": "conventions", "value": d[name]})
     available = sorted({*sections["measures"], *sections["sensitivities"], *sections["pnl_drivers"]})
     return DefinitionResult(term=term, found=False, available_terms=available)
+
+
+# ---------------------------------------------------------------- counterparty variants
+
+
+def _variant_rows(sql: str, params: list[Any]) -> list[tuple]:
+    """Variant tables keep one run per date and are never part of the official-run filter."""
+    with db.connect(_store_path(), read_only=True) as con:
+        return con.execute(sql, params).fetchall()
+
+
+def compare_variants(counterparty_id: str, as_of: date, component: str | None = None,
+                     pnl_start: date | None = None, top_n: int = 10) -> VariantComparison:
+    """An official counterparty next to its test variants: values, sensitivities and P&L for one date."""
+    with db.connect(_store_path(), read_only=True) as con:
+        if not db.table_exists(con, "dim_counterparty_variant"):
+            raise DataNotAvailable("No counterparty variants are loaded yet (landing/variants.yaml).")
+    cp = counterparty_id.strip()
+    found = _variant_rows("SELECT base_id FROM dim_counterparty_variant WHERE UPPER(variant_id) = UPPER(?)", [cp])
+    base = found[0][0] if found else cp
+    variants = _variant_rows(
+        "SELECT variant_id, method, owner FROM dim_counterparty_variant WHERE UPPER(base_id) = UPPER(?) "
+        "ORDER BY variant_id", [base])
+    if not variants:
+        bases = [r[0] for r in _variant_rows("SELECT DISTINCT base_id FROM dim_counterparty_variant ORDER BY 1", [])]
+        raise DataNotAvailable(f"{cp} has no variants in variants.yaml. Counterparties with variants: "
+                               f"{', '.join(bases[:20]) or 'none'}.")
+    _require_date(as_of)
+    comp = (component or "XVA").upper()
+    if pnl_start is None:
+        pnl_start = previous_business_date(as_of)
+    codes = [base] + [v[0] for v in variants]
+    info = {v[0]: (v[1], v[2]) for v in variants}
+    ph = db.placeholders(len(codes) - 1)
+    vcodes = codes[1:]
+    missing: list[str] = []
+
+    # values
+    official_vals = dict(_rows("SELECT v.measure, SUM(v.value) FROM xva_value v WHERE v.as_of = ? "
+                               "AND v.counterparty_id = ? GROUP BY v.measure", [as_of, base]))
+    variant_vals: dict[str, dict[str, float]] = {}
+    for vid, measure, value in _variant_rows(
+            f"SELECT counterparty_id, measure, SUM(value) FROM xva_variant_value WHERE as_of = ? "
+            f"AND counterparty_id IN ({ph}) GROUP BY 1, 2", [as_of, *vcodes]):
+        variant_vals.setdefault(vid, {})[measure] = value
+    base_total = _total(official_vals)
+    value_rows = [VariantValueRow(counterparty_id=base, role="official", loaded=bool(official_vals),
+                                  components=_ordered(official_vals), total=base_total)]
+    if not official_vals:
+        missing.append(f"{base}: no official values on {as_of}")
+    for vid in vcodes:
+        vals = variant_vals.get(vid, {})
+        if not vals:
+            missing.append(f"{vid}: no values loaded on {as_of}")
+        value_rows.append(VariantValueRow(
+            counterparty_id=vid, role="variant", method=info[vid][0], owner=info[vid][1], loaded=bool(vals),
+            components=_ordered(vals), total=_total(vals),
+            total_vs_official=_total(vals) - base_total if vals and official_vals else None))
+
+    # sensitivities: by asset class + measure, and the risk factors that differ most
+    sens: dict[tuple[str, str, str], dict[str, float]] = {}
+    units: dict[tuple[str, str], str] = {}
+    official_sens = _rows(
+        "SELECT s.asset_class, s.measure, s.risk_factor, MAX(s.unit), SUM(s.value) FROM xva_sensitivity s "
+        "WHERE s.as_of = ? AND s.counterparty_id = ? AND s.component = ? GROUP BY 1, 2, 3", [as_of, base, comp])
+    variant_sens = _variant_rows(
+        f"SELECT counterparty_id, asset_class, measure, risk_factor, MAX(unit), SUM(value) FROM xva_variant_sensitivity "
+        f"WHERE as_of = ? AND counterparty_id IN ({ph}) AND component = ? GROUP BY 1, 2, 3, 4", [as_of, *vcodes, comp])
+    for ac, m, rf, unit, v in official_sens:
+        sens.setdefault((ac, m, rf), {})[base] = v
+        units[(ac, m)] = unit
+    have_sens = {r[0] for r in variant_sens}
+    for vid, ac, m, rf, unit, v in variant_sens:
+        sens.setdefault((ac, m, rf), {})[vid] = v
+        units[(ac, m)] = unit
+    if not official_sens and (have_sens or vcodes):
+        missing.append(f"{base}: no official {comp} sensitivities on {as_of}")
+    missing += [f"{vid}: no {comp} sensitivities loaded on {as_of}" for vid in vcodes if vid not in have_sens]
+
+    def diff(vals: dict[str, float]) -> float | None:
+        present = [v for v in vcodes if v in vals]
+        if not present or base not in vals:
+            return None
+        return max(abs(vals[v] - vals[base]) for v in present)
+
+    by_class: dict[tuple[str, str], dict[str, float]] = {}
+    for (ac, m, _), vals in sens.items():
+        agg = by_class.setdefault((ac, m), {})
+        for k, v in vals.items():
+            agg[k] = agg.get(k, 0.0) + v
+    class_rows = [VariantSensRow(asset_class=ac, measure=m, unit=units.get((ac, m)),
+                                 values={c: vals[c] for c in codes if c in vals}, largest_difference=diff(vals))
+                  for (ac, m), vals in sorted(by_class.items())]
+    factor_rows = sorted(sorted(
+        (VariantSensRow(asset_class=ac, measure=m, risk_factor=rf, unit=units.get((ac, m)),
+                        values={c: vals[c] for c in codes if c in vals}, largest_difference=diff(vals))
+         for (ac, m, rf), vals in sens.items() if diff(vals)),
+        key=lambda r: (r.asset_class, r.risk_factor or "", r.measure)),
+        key=lambda r: r.largest_difference or 0.0, reverse=True)[:top_n]
+
+    # P&L by driver group, and actual P&L
+    group_of = _driver_grouper()
+    pnl: dict[str, dict[str, float]] = {}
+    start = pnl_start or as_of
+    period = "a.as_of > ? AND a.as_of <= ?" if pnl_start else "a.as_of = ?"
+    dates = [start, as_of] if pnl_start else [as_of]
+    official_pnl = _rows(f"SELECT a.driver, SUM(a.value) FROM xva_pnl_explain a WHERE {period} "
+                         "AND a.counterparty_id = ? AND a.measure = ? GROUP BY 1", [*dates, base, comp])
+    variant_pnl = _variant_rows(f"SELECT counterparty_id, driver, SUM(value) FROM xva_variant_pnl_explain a "
+                                f"WHERE {period} AND counterparty_id IN ({ph}) AND measure = ? GROUP BY 1, 2",
+                                [*dates, *vcodes, comp])
+    for drv, v in official_pnl:
+        g = group_of(drv) or drv
+        pnl.setdefault(g, {})[base] = pnl.get(g, {}).get(base, 0.0) + v
+    for vid, drv, v in variant_pnl:
+        g = group_of(drv) or drv
+        pnl.setdefault(g, {})[vid] = pnl.get(g, {}).get(vid, 0.0) + v
+    order = list(dictionary().get("pnl_driver_groups") or {}) + ["Other"]
+    pnl_rows = [VariantPnlRow(group=g, values={c: pnl[g].get(c, 0.0) for c in codes})
+                for g in sorted(pnl, key=lambda g: order.index(g) if g in order else len(order))]
+    actual: dict[str, float] = {}
+    with db.connect(_store_path(), read_only=True) as con:
+        has_actual = db.table_exists(con, "xva_pnl_actual")
+    if has_actual:
+        for v, n in _rows(f"SELECT SUM(a.actual_pl), COUNT(a.actual_pl) FROM xva_pnl_actual a WHERE {period} "
+                          "AND a.counterparty_id = ? AND a.measure = ?", [*dates, base, comp]):
+            if n:
+                actual[base] = v
+    for vid, v in _variant_rows(f"SELECT counterparty_id, SUM(actual_pl) FROM xva_variant_pnl_actual a WHERE {period} "
+                                f"AND counterparty_id IN ({ph}) AND measure = ? AND actual_pl IS NOT NULL GROUP BY 1",
+                                [*dates, *vcodes, comp]):
+        actual[vid] = v
+    have_pnl = {r[0] for r in variant_pnl}
+    missing += [f"{vid}: no {comp} P&L loaded for the period" for vid in vcodes if vid not in have_pnl]
+
+    runs = [r[0] for r in _variant_rows("SELECT run_id FROM data_status WHERE as_of = ? AND source = 'xva_variants'",
+                                        [as_of])]
+    return VariantComparison(
+        as_of=as_of, pnl_start=pnl_start, base_id=base, component=comp, counterparties=codes, values=value_rows,
+        sensitivities=class_rows, risk_factor_differences=factor_rows, pnl_groups=pnl_rows, actual_pl=actual,
+        missing=missing, variant_run_ids=runs, provenance=_provenance([as_of]),
+    )

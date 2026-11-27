@@ -13,6 +13,7 @@ EXPECTED_TOOLS = {
     "get_pnl_attribution",
     "search_counterparties",
     "get_definition",
+    "compare_counterparty_variants",
 }
 
 

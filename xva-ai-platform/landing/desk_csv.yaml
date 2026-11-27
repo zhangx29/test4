@@ -127,3 +127,15 @@ pnl_explain:              # P&L attribution by counterparty and driver (APP_PNL_
   # driver_column: <column with the driver name> and value_column: <column with the value>
   skip_counterparties: [TOTAL]   # rows that are totals, not counterparties, if the procedure returns any
 
+
+variants:                 # counterparty variants: test calculations such as XVATEST-CHT next to CHT
+  source: sp              # sp | csv | off (csv reads the file_prefix names from `folder`)
+  mapping: variants.yaml  # which variants exist, their official counterparty and what they do differently
+  marker: XVATEST         # a counterparty code containing this is a test variant: official loads always
+                          # leave such rows out; variants go to their own tables, never into a total
+  datasets: [pnl_explain] # which to load for variants (values, sensitivities, credit_spreads, pnl_explain),
+                          # each through its own procedure(s).
+                          # Add values and sensitivities once they have a procedure: in that dataset's section
+  params:                 # replaces these parameters on every variant call (only where the procedure has them)
+    P_ExcludedCpty: [CMLEASE]   # XVATEST must not be excluded here; P_CPTY_CODE gets the variant codes
+  file_prefix: VARIANTS_  # variant results are saved as VARIANTS_<usual file name> in sp_output_folder

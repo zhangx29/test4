@@ -2,7 +2,7 @@
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "xva-desk",
   "version": "0.1.0",
-  "description": "XVA desk analyst agent and skills (daily summary, P&L explain, counterparty drill-down, sensitivities, data quality) over the governed xva-data MCP server.",
+  "description": "XVA desk analyst agent and skills (daily summary, P&L explain, counterparty drill-down, sensitivities, data quality, counterparty variants) over the governed xva-data MCP server.",
   "author": { "name": "XVA AI admins" },
   "repository": "https://github.com/<org>/xva-ai-marketplace",
   "license": "LicenseRef-Proprietary",

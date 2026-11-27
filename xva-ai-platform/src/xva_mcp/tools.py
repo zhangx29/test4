@@ -1,4 +1,4 @@
-"""The eight XVA tools, independent of how they are called.
+"""The XVA tools, independent of how they are called.
 
 The same functions sit behind every front door, so entitlements, audit and results are identical:
   - server.py  MCP (VS Code / GitHub Copilot, Microsoft 365 Copilot MCP plugins)
@@ -27,6 +27,7 @@ from .models import (
     Level,
     PnlAttribution,
     SensitivityReport,
+    VariantComparison,
     XvaHistory,
     XvaMovers,
     XvaSummary,
@@ -301,6 +302,40 @@ def search_counterparties(
     )
 
 
+VariantComponent = Annotated[
+    str | None,
+    Field(max_length=10, description="XVA component for the sensitivities and P&L: XVA (default), CVA or FVA"),
+]
+PnlStart = Annotated[
+    date | None,
+    Field(description="P&L period start (exclusive), YYYY-MM-DD; omit for the day's P&L (previous business date)"),
+]
+TopFactors = Annotated[int, Field(ge=1, le=50, description="Risk factors with the largest differences to list (1-50)")]
+
+
+def compare_counterparty_variants(
+    counterparty_id: CounterpartyId,
+    as_of: AsOf = None,
+    component: VariantComponent = None,
+    pnl_start: PnlStart = None,
+    top_n: TopFactors = 10,
+) -> VariantComparison:
+    """An official counterparty side by side with its test variants (codes containing XVATEST, e.g. CHT with
+    XVATEST-CHT and XVATEST-CHT2): CVA, DVA, FVA and total XVA balances with each variant's difference from
+    the official counterparty, sensitivities by asset class and the risk factors that differ most, and P&L
+    by driver group with actual P&L. Give the official ID or a variant ID. Each variant's method says what it
+    calculates differently; quote it. Variants are never part of any official total: never add them to
+    desk, entity or book figures. 'missing' lists what is not loaded."""
+    d = _default_date(as_of)
+    return _guarded(
+        "compare_counterparty_variants",
+        {"counterparty_id": counterparty_id, "as_of": d, "component": component, "pnl_start": pnl_start,
+         "top_n": top_n},
+        lambda: store.compare_variants(counterparty_id, d, component, pnl_start, top_n),
+        counterparty_id=counterparty_id,
+    )
+
+
 def get_definition(term: Term) -> DefinitionResult:
     """Desk definition, unit and convention for a measure (CVA, DVA, FVA), sensitivity asset class,
     P&L driver, 'sign_convention', 'reporting_currency' or 'thresholds'."""
@@ -316,6 +351,7 @@ TOOLS: list[Callable[..., Any]] = [
     get_xva_history,
     get_pnl_attribution,
     search_counterparties,
+    compare_counterparty_variants,
     get_definition,
 ]
 

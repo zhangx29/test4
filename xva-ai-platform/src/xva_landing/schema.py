@@ -33,6 +33,19 @@ TABLES: dict[str, str] = {
     "notes VARCHAR",
     "mfl_result": "as_of DATE, run_id VARCHAR, counterparty_id VARCHAR, measure VARCHAR, value DOUBLE, "
     "source_file_sha256 VARCHAR, loaded_by VARCHAR, loaded_at TIMESTAMPTZ",
+    # Counterparty variants (test calculations such as XVATEST-CHT): separate tables, so no official query or
+    # total can include them. One run per date is kept (a reload replaces it).
+    "dim_counterparty_variant": "variant_id VARCHAR PRIMARY KEY, base_id VARCHAR, method VARCHAR, owner VARCHAR, "
+    "updated_at TIMESTAMPTZ",
+    "xva_variant_value": "as_of DATE, run_id VARCHAR, counterparty_id VARCHAR, netting_set_id VARCHAR, "
+    "measure VARCHAR, value DOUBLE, unit VARCHAR, legal_entity VARCHAR",
+    "xva_variant_sensitivity": "as_of DATE, run_id VARCHAR, counterparty_id VARCHAR, asset_class VARCHAR, "
+    "risk_factor VARCHAR, bucket VARCHAR, measure VARCHAR, value DOUBLE, unit VARCHAR, legal_entity VARCHAR, "
+    "component VARCHAR",
+    "xva_variant_pnl_explain": "as_of DATE, run_id VARCHAR, counterparty_id VARCHAR, measure VARCHAR, "
+    "driver VARCHAR, value DOUBLE, unit VARCHAR, legal_entity VARCHAR",
+    "xva_variant_pnl_actual": "as_of DATE, run_id VARCHAR, counterparty_id VARCHAR, measure VARCHAR, "
+    "actual_pl DOUBLE, expected_pl DOUBLE, unit VARCHAR, legal_entity VARCHAR",
     "landing_log": "loaded_at TIMESTAMPTZ, as_of DATE, source VARCHAR, run_id VARCHAR, dataset VARCHAR, "
     "file_name VARCHAR, file_sha256 VARCHAR, rows_loaded INTEGER, loaded_by VARCHAR, outcome VARCHAR",
 }
@@ -71,7 +84,8 @@ def rename_measure(path: str | Path, old: str, new: str) -> dict[str, int]:
     with db.connect(path) as con:
         ensure_schema(con)
         with con.transaction():
-            for table in ("xva_value", "xva_pnl_explain", "xva_pnl_actual", "xva_desk_total"):
+            for table in ("xva_value", "xva_pnl_explain", "xva_pnl_actual", "xva_desk_total", "xva_variant_value",
+                          "xva_variant_pnl_explain", "xva_variant_pnl_actual"):
                 n = con.execute(f"SELECT COUNT(*) FROM {table} WHERE measure = ?", [old]).fetchone()[0]
                 con.execute(f"UPDATE {table} SET measure = ? WHERE measure = ?", [new, old])
                 counts[table] = n

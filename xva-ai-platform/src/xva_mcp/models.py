@@ -180,3 +180,59 @@ class XvaHistory(BaseModel):
     change: float | None = Field(default=None, description="Total XVA change from the first to the last point")
     provenance: Provenance
 
+
+
+VARIANT_NOTE = (
+    "Variants are test calculations of the same counterparty (codes containing XVATEST). Only the official "
+    "counterparty is part of desk, entity and book totals; a variant's figures are never added to any total."
+)
+
+
+class VariantValueRow(BaseModel):
+    counterparty_id: str
+    role: Literal["official", "variant"]
+    method: str | None = Field(default=None, description="What the variant calculates differently (variants.yaml)")
+    owner: str | None = None
+    loaded: bool = Field(description="False when no values are loaded for this counterparty on the date")
+    components: dict[str, float] = Field(description="XVA by component")
+    total: float = Field(description="Sum of the in-total components, worked out as for official figures")
+    total_vs_official: float | None = Field(
+        default=None, description="This row's total minus the official counterparty's total"
+    )
+
+
+class VariantSensRow(BaseModel):
+    asset_class: str
+    measure: str
+    risk_factor: str | None = Field(default=None, description="Set in risk-factor rows; None in asset-class totals")
+    unit: str | None = None
+    values: dict[str, float] = Field(
+        description="Counterparty ID -> value; a counterparty without this measure loaded is left out (not zero)"
+    )
+    largest_difference: float | None = Field(
+        default=None, description="Largest absolute difference between a variant and the official value"
+    )
+
+
+class VariantPnlRow(BaseModel):
+    group: str
+    values: dict[str, float] = Field(description="Counterparty ID -> P&L")
+
+
+class VariantComparison(BaseModel):
+    as_of: date
+    pnl_start: date | None = Field(description="P&L covers after pnl_start up to as_of")
+    base_id: str = Field(description="The official counterparty")
+    component: str = Field(description="XVA component for the sensitivities and P&L")
+    counterparties: list[str] = Field(description="Official counterparty first, then its variants")
+    values: list[VariantValueRow]
+    sensitivities: list[VariantSensRow] = Field(description="By asset class and measure")
+    risk_factor_differences: list[VariantSensRow] = Field(
+        description="Risk factors where the variants differ most from the official counterparty"
+    )
+    pnl_groups: list[VariantPnlRow]
+    actual_pl: dict[str, float] = Field(description="Counterparty ID -> actual P&L for the period")
+    missing: list[str] = Field(description="What is not loaded for this date (per counterparty and dataset)")
+    variant_run_ids: list[str]
+    note: str = VARIANT_NOTE
+    provenance: Provenance

@@ -389,7 +389,7 @@ def read_history(res: DayResult, cfg: dict[str, Any], path: Path) -> None:
             _report(res, cfg, f"Counterparty total differs from desk history for {res.as_of}: {_cut(diffs)}")
 
 
-DATASETS = ("values", "sensitivities", "credit_spreads", "ssa", "history", "pnl_explain")
+DATASETS = ("values", "sensitivities", "credit_spreads", "ssa", "history", "pnl_explain", "variants")
 SOURCES = ("csv", "sp", "off")
 
 
@@ -398,9 +398,23 @@ class Fetcher:
     procedure and saving its result as CSV first (source: sp). source: off skips the dataset."""
 
     def __init__(self, cfg: dict[str, Any], folder: Path, overrides: dict[str, str] | None = None,
-                 backend: Any = None, cpty_codes: list[str] | None = None) -> None:
+                 backend: Any = None, cpty_codes: list[str] | None = None,
+                 param_overrides: dict[str, Any] | None = None, file_prefix: str = "") -> None:
         self.cfg, self.folder, self.overrides = cfg, folder, overrides or {}
         self._backend, self._registry, self.cpty_codes = backend, None, cpty_codes
+        # used for counterparty variants: parameters replaced on every call, and a prefix on file names
+        self.param_overrides, self.file_prefix = param_overrides or {}, file_prefix
+
+    def for_variants(self, spec: dict[str, Any], codes: list[str] | None) -> Fetcher:
+        """The same procedures and backend, for variant counterparties: every dataset takes the variants'
+        source, P_CPTY_CODE gets the variant codes, spec['params'] replaces parameters such as P_ExcludedCpty,
+        and files are named with spec['file_prefix'] (saved that way, and read that way from the CSV folder)."""
+        mode = str(spec.get("source", "sp")).lower()
+        mode = self.overrides.get("variants") or self.overrides.get("all") or mode
+        other = Fetcher(self.cfg, self.folder, {"all": mode}, self._backend, codes, spec.get("params") or {},
+                        str(spec.get("file_prefix", "VARIANTS_")))
+        other._registry = self._registry
+        return other
 
     def source(self, dataset: str) -> str:
         mode = self.overrides.get(dataset) or self.overrides.get("all") or (self.cfg.get(dataset) or {}).get("source")
@@ -445,6 +459,8 @@ class Fetcher:
         if mode == "off":
             return None
         pattern = entry.get(pattern_key)
+        if pattern and self.file_prefix:
+            pattern = self.file_prefix + pattern
         if mode == "csv":
             return _file(self.cfg, self.folder, pattern, d) if pattern else None
         name = entry.get(procedure_key)
@@ -457,8 +473,14 @@ class Fetcher:
         proc = self.registry["procedures"].get(name)
         if proc is None:
             raise SetupError(f"{label}: procedure {name} is not in {self.registry['_path']}")
+        if self.param_overrides:
+            from dataclasses import replace
+
+            proc = replace(proc, params={k: self.param_overrides.get(k, v) for k, v in proc.params.items()})
         save_as = entry.get("save_as") or (pattern if pattern and not any(ch in pattern for ch in "*?[") else
                                            f"{label}_{{yyyymmdd}}.csv")
+        if entry.get("save_as") and self.file_prefix:
+            save_as = self.file_prefix + save_as
         out = self.sp_folder(d) / save_as.replace("{yyyymmdd}", d.strftime("%Y%m%d"))
         try:
             header, rows = run_procedure(self.backend, proc, d, d, d, self.cpty_codes)
@@ -543,9 +565,36 @@ def read_day(cfg: dict[str, Any], folder: Path, d: date, values_only: bool = Fal
     if not values_only and cfg.get("pnl_explain") and fx.source("pnl_explain") != "off":
         read_pnl_dataset(res, cfg, fx, d)
 
+    drop_variant_rows(res, variant_marker(cfg))
     digest = hashlib.sha256("".join(sorted(h for _, _, h in res.files)).encode()).hexdigest()
     res.run_id = f"{cfg.get('source', 'xva_system').upper()}-{d:%Y%m%d}-{digest[:8]}"
     return res
+
+
+def variant_marker(cfg: dict[str, Any]) -> str:
+    """Text that marks a test variant's counterparty code (XVATEST by default)."""
+    return str((cfg.get("variants") or {}).get("marker", "XVATEST")).strip()
+
+
+def is_variant(cp: str | None, marker: str) -> bool:
+    return bool(marker) and marker.upper() in (cp or "").upper()
+
+
+def drop_variant_rows(res: DayResult, marker: str) -> None:
+    """Official data never holds a test variant (e.g. XVATEST-CHT), even if an input file includes one:
+    variants load separately, into their own tables (see variants.py)."""
+    if not marker:
+        return
+    found = ({r[2] for r in (*res.values, *res.sens, *res.pnl, *res.pnl_actual, *res.curves) if is_variant(r[2], marker)}
+             | {cp for cp in (*res.counterparties, *res.attributes) if is_variant(cp, marker)})
+    if not found:
+        return
+    for name in ("values", "sens", "pnl", "pnl_actual", "curves"):
+        setattr(res, name, [r for r in getattr(res, name) if not is_variant(r[2], marker)])
+    res.counterparties = {k: v for k, v in res.counterparties.items() if not is_variant(k, marker)}
+    res.attributes = {k: v for k, v in res.attributes.items() if not is_variant(k, marker)}
+    res.notes.append(f"{len(found)} {marker} counterparties left out of official data (variants load separately): "
+                     f"{_cut(sorted(found))}")
 
 
 def read_pnl_dataset(res: DayResult, cfg: dict[str, Any], fx: Fetcher, d: date) -> None:
@@ -838,6 +887,11 @@ def main(argv: list[str] | None = None) -> int:
     when.add_argument("--list", action="store_true", help="show the dates in the folder and their load status")
     p.add_argument("--to", dest="date_to", help="last date of a range")
     p.add_argument("--reload", action="store_true", help="with --all or a range: also reload dates already loaded")
+    p.add_argument("--variants-only", action="store_true",
+                   help="load only the counterparty variants (landing/variants.yaml) for the dates, not official data")
+    p.add_argument("--find-variants", action="store_true",
+                   help="with --as-of: list counterparties with the variant marker (XVATEST) that the variant "
+                        "procedures return but variants.yaml doesn't list; nothing is loaded")
     a = p.parse_args(argv)
 
     try:
@@ -849,7 +903,17 @@ def main(argv: list[str] | None = None) -> int:
             raise SetupError(f"Folder not found or not reachable: {folder}")
         store = Path(a.store)
         source = cfg.get("source", "xva_system")
-        done = loaded_dates(store, source)
+        variants_on = bool(cfg.get("variants")) and fx.source("variants") != "off"
+        if (a.variants_only or a.find_variants) and not variants_on:
+            raise SetupError("variants are off: add a variants section to desk_csv.yaml, or drop --source variants=off")
+        if a.find_variants and not a.as_of:
+            raise SetupError("--find-variants needs --as-of")
+        mapping: list[dict[str, str]] = []
+        if variants_on:
+            from .variants import VARIANT_SOURCE, load_mapping
+
+            mapping = load_mapping(cfg)
+        done = loaded_dates(store, VARIANT_SOURCE if a.variants_only else source)
 
         def when_(text: str) -> date:
             from .sp_runner import resolve_date
@@ -870,6 +934,20 @@ def main(argv: list[str] | None = None) -> int:
             for d in found:
                 state = done.get(d)
                 print(f"  {d}  " + ("not loaded" if not state else ("loaded " if state[1] else "REJECTED ") + state[0]))
+            return 0
+        if a.find_variants:
+            from .variants import find_unlisted
+
+            d = when_(a.as_of)
+            unlisted, notes = find_unlisted(cfg, folder, d, fx)
+            for n in notes:
+                print(f"    note: {n}")
+            if unlisted:
+                print(f"{len(unlisted)} variant codes on {d} are not in variants.yaml (add them with their base):")
+                for cp in unlisted:
+                    print(f"  {cp}")
+            else:
+                print(f"Every variant code on {d} is in variants.yaml.")
             return 0
         if a.as_of:
             dates = [when_(a.as_of)]
@@ -896,24 +974,42 @@ def main(argv: list[str] | None = None) -> int:
     print("Sources: " + ", ".join(f"{ds}={fx.source(ds)}" for ds in DATASETS if cfg.get(ds)))
     rejected = 0
     for d in dates:
-        try:
-            res = read_day(cfg, folder, d, a.values_only, fx)
-        except SetupError as exc:
-            print(f"Setup problem: {exc}", file=sys.stderr)
-            return 2
-        write_day(cfg, store, res)
-        if a.archive:
-            archive_files(res, Path(a.archive))
-        if res.loaded:
-            print(f"{d} run {res.run_id}: loaded ({len(res.values):,} values, {len(res.sens):,} sensitivities, "
-                  f"{len(res.pnl):,} P&L rows)")
-            for n in res.notes:
+        if not a.variants_only:
+            try:
+                res = read_day(cfg, folder, d, a.values_only, fx)
+            except SetupError as exc:
+                print(f"Setup problem: {exc}", file=sys.stderr)
+                return 2
+            write_day(cfg, store, res)
+            if a.archive:
+                archive_files(res, Path(a.archive))
+            if res.loaded:
+                print(f"{d} run {res.run_id}: loaded ({len(res.values):,} values, {len(res.sens):,} sensitivities, "
+                      f"{len(res.pnl):,} P&L rows)")
+                for n in res.notes:
+                    print(f"    note: {n}")
+            else:
+                rejected += 1
+                print(f"{d} run {res.run_id}: REJECTED, nothing loaded")
+                for f in res.failures:
+                    print(f"    {f}")
+        if variants_on and not a.values_only:
+            from .variants import read_variants, summary_line, write_variants
+
+            try:
+                vres = read_variants(cfg, folder, d, fx, [m["code"] for m in mapping])
+            except SetupError as exc:
+                print(f"Setup problem: {exc}", file=sys.stderr)
+                return 2
+            write_variants(store, vres, mapping)
+            if a.archive:
+                archive_files(vres, Path(a.archive))
+            print(f"{d} {summary_line(vres)}")
+            for n in vres.notes:
                 print(f"    note: {n}")
-        else:
-            rejected += 1
-            print(f"{d} run {res.run_id}: REJECTED, nothing loaded")
-            for f in res.failures:
-                print(f"    {f}")
+    if a.variants_only:
+        print(f"Done: variants for {len(dates)} dates. Tools must use XVA_DICTIONARY_PATH={cfg['_dictionary_path']}")
+        return 0
     print(f"Done: {len(dates) - rejected} loaded, {rejected} rejected. Tools must use XVA_DICTIONARY_PATH="
           f"{cfg['_dictionary_path']}")
     return 0 if not rejected else 1

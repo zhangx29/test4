@@ -180,7 +180,8 @@ def test_control_file_mismatch_is_a_note_unless_strict(desk, tmp_path):
     strict = tmp_path / "strict.yaml"
     strict.write_text(CONFIG.read_text(encoding="utf-8").replace("strict_tieouts: false", "strict_tieouts: true")
                       .replace("dictionary: desk_dictionary.yaml", f"dictionary: '{ROOT / 'landing' / 'desk_dictionary.yaml'}'")
-                      .replace("stored_procs: stored_procs.yaml", f"stored_procs: '{ROOT / 'landing' / 'stored_procs.yaml'}'"),
+                      .replace("stored_procs: stored_procs.yaml", f"stored_procs: '{ROOT / 'landing' / 'stored_procs.yaml'}'")
+                      .replace("mapping: variants.yaml", f"mapping: '{ROOT / 'landing' / 'variants.yaml'}'"),
                       encoding="utf-8")
     edit(folder / "XVA_Sens_Cons_20261124.csv", lambda r: r[1].__setitem__(1, "88888"))
     code = ldc.main(["--config", str(strict), "--store", str(store_path), "--folder", str(folder), "--as-of", "2026-11-24"])

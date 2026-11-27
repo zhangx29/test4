@@ -40,6 +40,7 @@ COMMANDS: dict[str, str] = {
     "history": "get_xva_history",
     "pnl": "get_pnl_attribution",
     "search": "search_counterparties",
+    "variants": "compare_counterparty_variants",
     "define": "get_definition",
 }
 

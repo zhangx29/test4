@@ -28,6 +28,7 @@ TOOL_ROLES: dict[str, set[str]] = {
     "get_xva_history": {"xva-admin", "xva-desk", "xva-exec"},
     "get_counterparty_xva_timeseries": {"xva-admin", "xva-desk"},
     "search_counterparties": {"xva-admin", "xva-desk"},
+    "compare_counterparty_variants": {"xva-admin", "xva-desk"},  # test variants: not for executives
 }
 
 # Roles that may see counterparty-level detail.

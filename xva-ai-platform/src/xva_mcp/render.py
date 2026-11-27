@@ -18,6 +18,7 @@ from .models import (
     PnlAttribution,
     Provenance,
     SensitivityReport,
+    VariantComparison,
     XvaHistory,
     XvaMovers,
     XvaPoint,
@@ -185,6 +186,42 @@ def _definition(r: DefinitionResult) -> str:
     return f"{r.term} ({entry.get('section')}):\n{body}"
 
 
+def _variants(r: VariantComparison) -> str:
+    cps = r.counterparties
+    lines = [f"{r.base_id} and its test variants on {r.as_of}", r.note, "Variants"]
+    for v in r.values[1:]:
+        lines.append(f"  {v.counterparty_id}: {v.method or '(method not described in variants.yaml)'}"
+                     + (f" - owner {v.owner}" if v.owner else ""))
+    comps = list(r.values[0].components)
+    rows = [(v.counterparty_id + (" (official)" if v.role == "official" else ""),
+             *(money(v.components.get(c)) if v.loaded else "-" for c in comps),
+             money(v.total) if v.loaded else "-",
+             money(v.total_vs_official) if v.total_vs_official is not None else "")
+            for v in r.values]
+    lines += ["Balances", table(["Counterparty", *comps, "Total", "vs official"], rows, 1)]
+    if r.sensitivities:
+        lines.append(f"{r.component} sensitivities by asset class")
+        lines.append(table(["Asset class", "Measure", "Unit", *cps],
+                           [(s.asset_class, s.measure, s.unit or "", *(num(s.values[c]) if c in s.values else "-" for c in cps))
+                            for s in r.sensitivities], 3))
+    if r.risk_factor_differences:
+        lines.append("Risk factors that differ most")
+        lines.append(table(["Risk factor", "Measure", *cps, "Largest diff"],
+                           [(f"{s.asset_class} {s.risk_factor}", s.measure, *(num(s.values[c]) if c in s.values else "-" for c in cps),
+                             num(s.largest_difference)) for s in r.risk_factor_differences], 2))
+    if r.pnl_groups:
+        lines.append(f"{r.component} P&L by driver group, after {r.pnl_start} up to {r.as_of}")
+        rows = [(g.group, *(money(g.values.get(c)) for c in cps)) for g in r.pnl_groups]
+        if r.actual_pl:
+            rows.append(("Actual P&L", *(money(r.actual_pl[c]) if c in r.actual_pl else "-" for c in cps)))
+        lines.append(table(["Group", *cps], rows, 1))
+    if r.missing:
+        lines.append("Not loaded: " + "; ".join(r.missing))
+    if r.variant_run_ids:
+        lines.append("Variant run: " + ", ".join(r.variant_run_ids))
+    return "\n".join(lines)
+
+
 _RENDERERS = {
     DataStatus: _status,
     XvaSummary: _summary,
@@ -195,6 +232,7 @@ _RENDERERS = {
     PnlAttribution: _pnl,
     CounterpartySearch: _search,
     DefinitionResult: _definition,
+    VariantComparison: _variants,
 }
 
 

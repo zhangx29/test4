@@ -212,6 +212,26 @@ The P&L template procedure returns one row per legal entity and counterparty and
 
 To add another procedure later: add an entry in `stored_procs.yaml`, look at its columns with `--show`, then set `procedure:` and `source: sp` on the dataset it feeds (`values`, `credit_spreads`, `ssa`, `history`; for sensitivities, `procedure` and `control_procedure` on each file). A procedure that returns something new, such as FVA01, needs a dataset and a table first.
 
+## Counterparty variants (XVATEST)
+
+Test calculations of a counterparty, such as `XVATEST-CHT` and `XVATEST-CHT2` next to `CHT`, load every day next to the official data and can be compared in the chat, but never reach a total.
+
+- **Which variants exist:** `landing/variants.yaml` lists each variant's `code`, the official counterparty it belongs to (`base`), what it calculates differently (`method`, quoted in answers) and its `owner`. Only listed codes load.
+- **How they load:** the `variants` section of `landing/desk_csv.yaml` names the datasets to load for them (`values`, `sensitivities`, `credit_spreads`, `pnl_explain`), each through that dataset's own procedure(s). On a variant call, `P_CPTY_CODE` gets the variant codes and `params` replaces `P_ExcludedCpty` with a list without XVATEST. Results are saved as `VARIANTS_<usual name>` in `sp_output_folder`; `source: csv` reads those names from the CSV folder instead. As shipped only `pnl_explain` is listed, since it is the only dataset with procedures; add the others once their sections have `procedure:`.
+- **Kept apart:** variant rows go to their own tables (`xva_variant_value`, `xva_variant_sensitivity`, `xva_variant_pnl_explain`, `xva_variant_pnl_actual`, plus `dim_counterparty_variant`). No official query reads them, and official loads drop any row whose code contains `marker` (XVATEST) with a note. Only the variants are stored, not copies of other counterparties. A variant problem is a note under the `xva_variants` source in `status` and never fails the official day.
+- **In the chat:** `compare_counterparty_variants` (`xva-cli variants --counterparty-id CHT`) shows the official counterparty and its variants side by side: balances with each variant's difference, sensitivities by asset class and the risk factors that differ most, P&L by driver group with actual P&L, and what's not loaded. Desk and admins only; executives are refused.
+
+```bat
+rem daily: variants load after each official day
+python -m xva_landing.load_desk_csv --config landing\desk_csv.yaml --store %STORE% --as-of t-1
+rem variants only, e.g. after adding one to variants.yaml
+python -m xva_landing.load_desk_csv --config landing\desk_csv.yaml --store %STORE% --from 2026-11-01 --to t-1 --variants-only --reload
+rem new XVATEST codes the procedures return that variants.yaml doesn't list (nothing is loaded)
+python -m xva_landing.load_desk_csv --config landing\desk_csv.yaml --store %STORE% --as-of t-1 --find-variants
+rem official data only, for one run
+python -m xva_landing.load_desk_csv --config landing\desk_csv.yaml --store %STORE% --as-of t-1 --source variants=off
+```
+
 ## Try the tools in VS Code with sample data
 
 Open `xva-ai-platform` in VS Code and add `.vscode/mcp.json` (development only; never point this at production data):

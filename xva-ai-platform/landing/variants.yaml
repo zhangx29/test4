@@ -1,0 +1,20 @@
+# Counterparty variants: test calculations of an official counterparty (codes contain XVATEST).
+# They are loaded every day next to the official data and can be compared with it in the chat
+# (compare_counterparty_variants), but never add into any official total.
+#
+#   code:   the variant's counterparty code, as the procedures return it
+#   base:   the official counterparty it is a variant of
+#   method: what it calculates differently from the base - the chat quotes this, so be specific
+#   owner:  who to ask about it
+#
+# A code that a procedure returns but isn't listed here is not loaded. Check for new ones with:
+#   python -m xva_landing.load_desk_csv --config landing\desk_csv.yaml --store <store> --as-of t-1 --find-variants
+variants:
+  - code: XVATEST-CHT
+    base: CHT
+    method: ""            # TO FILL: what XVATEST-CHT calculates differently from CHT
+    owner: XVA desk
+  - code: XVATEST-CHT2
+    base: CHT
+    method: ""            # TO FILL: what XVATEST-CHT2 calculates differently from CHT
+    owner: XVA desk
