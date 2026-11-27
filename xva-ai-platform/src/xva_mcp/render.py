@@ -139,13 +139,25 @@ def _sens(r: SensitivityReport) -> str:
 
 def _pnl(r: PnlAttribution) -> str:
     scope = f"{r.level} {r.key}" if r.key else "whole desk"
-    rows = [(d.driver, money(d.value)) for d in r.drivers]
-    rows.append(("Sum of drivers", money(sum(d.value for d in r.drivers))))
-    lines = [
-        f"XVA P&L explain, {scope}, after {r.start} up to {r.end}",
-        table(["Driver", "Value"], rows, 1),
-        f"Change in XVA from official values: {money(r.xva_change)}",
-        f"Reconciliation gap (change minus drivers): {money(r.reconciliation_gap)}",
+    scope = f"{r.component} " + scope if r.component else scope
+    lines = [f"XVA P&L explain, {scope}, after {r.start} up to {r.end}"]
+    if r.groups:
+        rows = [(g.driver, money(g.value)) for g in r.groups]
+        rows.append(("Sum of drivers", money(sum(d.value for d in r.drivers))))
+        lines += ["By driver group", table(["Group", "Value"], rows, 1), "By driver"]
+        lines.append(table(["Driver", "Group", "Value"], [(d.driver, d.group or "", money(d.value)) for d in r.drivers], 2))
+    else:
+        rows = [(d.driver, money(d.value)) for d in r.drivers]
+        rows.append(("Sum of drivers", money(sum(d.value for d in r.drivers))))
+        lines.append(table(["Driver", "Value"], rows, 1))
+    if r.actual_pl is not None:
+        lines.append(f"Actual P&L (P&L system): {money(r.actual_pl)}")
+    if r.expected_pl is not None:
+        lines.append(f"Total expected P&L (P&L system): {money(r.expected_pl)}")
+    what = "actual P&L" if r.reconciliation_basis == "actual_pl" else "change"
+    lines += [
+        f"Change in {r.component or 'XVA'} from official values: {money(r.xva_change)}",
+        f"Reconciliation gap ({what} minus drivers): {money(r.reconciliation_gap)}",
     ]
     if r.unexplained_flag:
         lines.append(f"WARNING - unexplained {money(r.unexplained)} breaches the desk threshold")

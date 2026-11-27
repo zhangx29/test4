@@ -84,7 +84,7 @@ def _store_path() -> str:
 
 
 _FACT = re.compile(
-    r"\bFROM\s+(xva_value|xva_sensitivity|xva_pnl_explain)\b(?:\s+(?:AS\s+)?(?!(?:WHERE|GROUP|ORDER|JOIN|LIMIT)\b)([a-z]\w*))?",
+    r"\bFROM\s+(xva_value|xva_sensitivity|xva_pnl_explain|xva_pnl_actual)\b(?:\s+(?:AS\s+)?(?!(?:WHERE|GROUP|ORDER|JOIN|LIMIT)\b)([a-z]\w*))?",
     re.IGNORECASE,
 )
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
@@ -453,9 +453,21 @@ def sensitivities(
 # ---------------------------------------------------------------- P&L attribution
 
 
-def pnl_attribution(start: date, end: date, level: str, key: str | None) -> PnlAttribution:
+def pnl_components() -> list[str]:
+    """Components P&L explain is stored for; the first is the default. Empty = rows are summed as stored."""
+    return list(dictionary().get("pnl_components") or [])
+
+
+def pnl_attribution(start: date, end: date, level: str, key: str | None,
+                    component: str | None = None) -> PnlAttribution:
     if start >= end:
         raise DataNotAvailable("start must be earlier than end.")
+    allowed = pnl_components()
+    component = (component or (allowed[0] if allowed else "")).upper() or None
+    if component and allowed and component not in allowed:
+        raise DataNotAvailable(f"P&L explain is stored for {', '.join(allowed)}, not {component}.")
+    total_label = str(dictionary().get("total_label", "XVA")).upper()
+    value_measures = total_components() if component in (None, total_label) else [component]
     _require_date(start)
     _require_date(end)
     if level == "counterparty" and not key:
@@ -469,10 +481,10 @@ def pnl_attribution(start: date, end: date, level: str, key: str | None) -> PnlA
         f"""
         SELECT v.as_of, SUM(v.value)
         FROM xva_value v JOIN dim_counterparty c ON c.counterparty_id = v.counterparty_id
-        WHERE v.as_of IN (?, ?) AND v.measure IN ({db.placeholders(len(total_components()))}){where("v")}
+        WHERE v.as_of IN (?, ?) AND v.measure IN ({db.placeholders(len(value_measures))}){where("v")}
         GROUP BY v.as_of
         """,
-        [start, end, *total_components(), *params],
+        [start, end, *value_measures, *params],
     )
     by_date = dict(values)
     if end not in by_date:
@@ -483,38 +495,80 @@ def pnl_attribution(start: date, end: date, level: str, key: str | None) -> PnlA
         f"""
         SELECT p.driver, SUM(p.value)
         FROM xva_pnl_explain p JOIN dim_counterparty c ON c.counterparty_id = p.counterparty_id
-        WHERE p.as_of > ? AND p.as_of <= ?{where("p")}
+        WHERE p.as_of > ? AND p.as_of <= ?{" AND p.measure = ?" if component else ""}{where("p")}
         GROUP BY p.driver
         """,
-        [start, end, *params],
+        [start, end, *([component] if component else []), *params],
     )
     if not drivers:
         raise DataNotAvailable(
-            f"No P&L explain is loaded for {start} to {end}. The change in total XVA is {xva_change:,.0f}; "
+            f"No {component + ' ' if component else ''}P&L explain is loaded for {start} to {end}. "
+            f"The change in {component or 'total XVA'} is {xva_change:,.0f}; "
             "use get_xva_movers for the change by counterparty or entity and component."
         )
-    order = list(dictionary()["pnl_drivers"])
+    order = list(dictionary().get("pnl_drivers") or {})
+    group_of = _driver_grouper()
     driver_rows = sorted(
-        (DriverRow(driver=d, value=v) for d, v in drivers),
+        (DriverRow(driver=d, value=v, group=group_of(d)) for d, v in drivers),
         key=lambda r: order.index(r.driver) if r.driver in order else len(order),
     )
+    group_order = list(dictionary().get("pnl_driver_groups") or {}) + ["Other"]
+    group_sums: dict[str, float] = {}
+    for r in driver_rows:
+        if r.group:
+            group_sums[r.group] = group_sums.get(r.group, 0.0) + r.value
+    groups = [DriverRow(driver=g, value=group_sums[g], group=g) for g in group_order if g in group_sums]
+
+    with db.connect(_store_path(), read_only=True) as con:
+        has_actual = db.table_exists(con, "xva_pnl_actual")  # stores built before the table existed
+    actual = [] if not has_actual else _rows(
+        f"""
+        SELECT SUM(a.actual_pl), SUM(a.expected_pl), COUNT(a.actual_pl), COUNT(a.expected_pl)
+        FROM xva_pnl_actual a JOIN dim_counterparty c ON c.counterparty_id = a.counterparty_id
+        WHERE a.as_of > ? AND a.as_of <= ?{" AND a.measure = ?" if component else ""}{where("a")}
+        """,
+        [start, end, *([component] if component else []), *params],
+    )
+    actual_pl = actual[0][0] if actual and actual[0][2] else None
+    expected_pl = actual[0][1] if actual and actual[0][3] else None
+    basis = "actual_pl" if actual_pl is not None else "xva_change"
+    target = actual_pl if actual_pl is not None else xva_change
+
     unexplained = sum(r.value for r in driver_rows if r.driver == "unexplained")
     t = dictionary()["thresholds"]
     flag = abs(unexplained) > t["unexplained_abs_cad"] or (
-        xva_change != 0 and abs(unexplained) > t["unexplained_pct_of_change"] * abs(xva_change)
+        target != 0 and abs(unexplained) > t["unexplained_pct_of_change"] * abs(target)
     )
     return PnlAttribution(
         start=start,
         end=end,
         level=level,  # type: ignore[arg-type]
         key=key,
+        component=component,
         xva_change=xva_change,
+        actual_pl=actual_pl,
+        expected_pl=expected_pl,
+        groups=groups,
         drivers=driver_rows,
         unexplained=unexplained,
         unexplained_flag=flag,
-        reconciliation_gap=xva_change - sum(r.value for r in driver_rows),
+        reconciliation_basis=basis,  # type: ignore[arg-type]
+        reconciliation_gap=round(target - sum(r.value for r in driver_rows), 2),
         provenance=_provenance([start, end]),
     )
+
+
+def _driver_grouper():
+    """Driver -> group from pnl_driver_groups in the dictionary (group: [regex, ...]; first match wins)."""
+    spec = dictionary().get("pnl_driver_groups") or {}
+    compiled = [(g, [re.compile(p) for p in (pats if isinstance(pats, list) else [pats])]) for g, pats in spec.items()]
+
+    def group_of(driver: str) -> str | None:
+        if not compiled:
+            return None
+        return next((g for g, pats in compiled if any(p.search(driver) for p in pats)), "Other")
+
+    return group_of
 
 
 # ---------------------------------------------------------------- reference

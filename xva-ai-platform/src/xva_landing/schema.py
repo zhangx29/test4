@@ -21,6 +21,8 @@ TABLES: dict[str, str] = {
     "value DOUBLE, unit VARCHAR, legal_entity VARCHAR",
     "xva_pnl_explain": "as_of DATE, run_id VARCHAR, counterparty_id VARCHAR, measure VARCHAR, driver VARCHAR, "
     "value DOUBLE, unit VARCHAR, legal_entity VARCHAR",
+    "xva_pnl_actual": "as_of DATE, run_id VARCHAR, counterparty_id VARCHAR, measure VARCHAR, actual_pl DOUBLE, "
+    "expected_pl DOUBLE, unit VARCHAR, legal_entity VARCHAR",
     "xva_sensitivity": "as_of DATE, run_id VARCHAR, counterparty_id VARCHAR, asset_class VARCHAR, risk_factor VARCHAR, "
     "bucket VARCHAR, measure VARCHAR, value DOUBLE, unit VARCHAR, legal_entity VARCHAR, component VARCHAR",
     "xva_cpty_curve": "as_of DATE, run_id VARCHAR, counterparty_id VARCHAR, credit_curve VARCHAR, "
@@ -63,12 +65,30 @@ def create_store(path: str | Path) -> Path:
     return path
 
 
+def rename_measure(path: str | Path, old: str, new: str) -> dict[str, int]:
+    """Rename an XVA component in every table that stores components, e.g. DVACO -> DVA."""
+    counts = {}
+    with db.connect(path) as con:
+        ensure_schema(con)
+        with con.transaction():
+            for table in ("xva_value", "xva_pnl_explain", "xva_pnl_actual", "xva_desk_total"):
+                n = con.execute(f"SELECT COUNT(*) FROM {table} WHERE measure = ?", [old]).fetchone()[0]
+                con.execute(f"UPDATE {table} SET measure = ? WHERE measure = ?", [new, old])
+                counts[table] = n
+    return counts
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description="Create an empty curated store (or add missing tables)")
     p.add_argument("--store", required=True, help="path ending .duckdb (DuckDB) or .sqlite (SQLite)")
+    p.add_argument("--rename-measure", nargs=2, metavar=("OLD", "NEW"), help="rename a component, e.g. DVACO DVA")
     a = p.parse_args()
     path = create_store(a.store)
     print(f"Store ready: {path} ({db.backend_for(path)}); tables: {', '.join(TABLES)}")
+    if a.rename_measure:
+        counts = rename_measure(path, *a.rename_measure)
+        print(f"Renamed {a.rename_measure[0]} to {a.rename_measure[1]}: "
+              + ", ".join(f"{t} {n} rows" for t, n in counts.items()))
 
 
 if __name__ == "__main__":

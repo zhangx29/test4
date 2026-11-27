@@ -3,13 +3,24 @@
 # Paths in single quotes keep the backslashes as typed.
 
 folder: '\\ibgmstorfile01\group1\CVA Desk\Limeng\Python\XVA CSV'
+
+# ---- Where each dataset comes from ---------------------------------------------------------------------
+# Every dataset below has   source: csv | sp | off
+#   csv  read the file from `folder` (the output of the stored procedure run earlier, e.g. by the notebook)
+#   sp   run the stored procedure now through MFL (procedures are defined in stored_procs.yaml) and save the
+#        result as CSV in sp_output_folder\<yyyymmdd>\ before loading it - same checks as csv
+#   off  skip the dataset
+# Override for one run:  --source pnl_explain=csv   or   --source all=csv
+stored_procs: stored_procs.yaml                 # relative to this file
+sp_output_folder: '%USERPROFILE%\xva_data\sp_output'   # results of procedure runs (kept as an audit copy)
 dictionary: desk_dictionary.yaml   # relative to this file; the tools need XVA_DICTIONARY_PATH set to the same file
 source: xva_system                 # data_status source; must equal official_source in the dictionary
 default_desk: XVA Desk
 
 # COB_DATE text in the files. US month/day comes first; every file's dates are also checked against the
 # date in its file name, so a day/month mix-up is caught.
-date_formats: ['%m/%d/%Y %H:%M', '%m/%d/%Y %H:%M:%S', '%m/%d/%Y', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d', '%Y%m%d']
+date_formats: ['%m/%d/%Y %I:%M:%S%p', '%m/%d/%Y %I:%M:%S %p', '%m/%d/%Y %I:%M%p', '%m/%d/%Y %H:%M',
+               '%m/%d/%Y %H:%M:%S', '%m/%d/%Y', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d', '%Y%m%d']
 
 tolerance: 1.0            # CAD; allowed difference in tie-outs (XVA column, control files, desk history)
 strict_tieouts: false     # true = a tie-out difference rejects the day; false = it is reported in status notes
@@ -17,12 +28,16 @@ drop_zero_sensitivities: true   # zero cells are not stored (sums are unchanged;
 unmapped_columns: fail    # fail | ignore: what to do with a sensitivity column no rule below recognises
 
 values:                   # required every day
+  source: csv
+  # procedure: xva_by_cpty       # when source: sp - a procedure in stored_procs.yaml returning these columns
   pattern: XVA_CVA_CVACO_DVACO_FVA_by_Cpty_{yyyymmdd}.csv
   id_columns: {as_of: COB_DATE, legal_entity: INTERNAL_ENTITY, counterparty_id: CPTY_CODE}
-  components: [CVA, CVACO, DVACO, FVA]   # one column each; names must be measures in the dictionary
+  components: [CVA, CVACO, DVACO, FVA]   # file columns, one per component
+  report_as: {DVACO: DVA}                # stored and reported under this name (the desk reports DVACO as DVA)
   total_column: XVA                      # checked against the dictionary's in_total components
 
 sensitivities:            # optional; each file is one XVA component
+  source: csv             # sp: give each file a procedure: (and control_procedure: for its _Cons_ control)
   id_columns: {as_of: COB_DATE, legal_entity: INTERNAL_ENTITY, counterparty_id: CPTY_CODE}
   files:
     - {pattern: 'CVA_Sens_{yyyymmdd}.csv', component: CVA, control: 'CVA_Sens_Cons_{yyyymmdd}.csv'}
@@ -58,6 +73,7 @@ sensitivities:            # optional; each file is one XVA component
     - {regex: '^CARRY_1D$', asset_class: CARRY, risk_factor: CARRY, measure: carry_1d}
 
 credit_spreads:           # optional; XVA_ALL01: one row per counterparty, no date or entity column
+  source: csv
   pattern: XVA_ALL01_{yyyymmdd}.csv
   component: XVA          # sensitivities of total XVA
   id_columns: {counterparty_id: CPTY_CODE}
@@ -76,11 +92,38 @@ credit_spreads:           # optional; XVA_ALL01: one row per counterparty, no da
     - {regex: '^CPTY_CR01_1pct$', asset_class: CR, risk_factor: CPTY_CDS, measure: cr01_1pct}
 
 ssa:                      # optional; tags the counterparties listed here with segment SSA
+  source: csv
   pattern: XVA_CVA_CVACO_DVACO_FVA_SSA_{yyyymmdd}.csv
   id_column: CPTY_CODE
 
 history:                  # optional; desk totals for every date from the start date to the file date
+  source: csv
   pattern: XVA_CVA_CVACO_DVACO_FVA_[0-9]*_{yyyymmdd}.csv
   date_column: COB_DATE
   components: [CVA, CVACO, DVACO, FVA]
+  report_as: {DVACO: DVA}
   total_column: XVA
+
+pnl_explain:              # P&L attribution by counterparty and driver (APP_PNL_FVA2_REPORT, "PnL template")
+  source: sp              # no P&L CSV in the folder yet; csv reads the pattern below from `folder` instead
+  required: false         # false = a P&L problem is a note and the rest of the day still loads
+  files:                  # one input per component; XVA is the total
+    - {component: CVA, procedure: cva_pnl, pattern: 'XVA_PnL_CVA_{yyyymmdd}.csv'}
+    - {component: FVA, procedure: fva_pnl, pattern: 'XVA_PnL_FVA_{yyyymmdd}.csv'}
+    - {component: XVA, procedure: xva_pnl, pattern: 'XVA_PnL_XVA_{yyyymmdd}.csv'}
+  # Layout confirmed 2026-11-27: one row per legal entity and counterparty, one column per driver.
+  id_columns: {as_of: COB_DATE, legal_entity: INTERNAL_ENTITY, counterparty_id: CPTY_CODE}
+  driver_columns: all     # every other column is a driver, stored under its column name (see pnl_drivers in
+                          # desk_dictionary.yaml); a new column the procedure adds later loads with a note
+  actual_column: ACTUAL_PL               # stored in xva_pnl_actual, not as a driver
+  expected_column: Total Expected P/L    # stored in xva_pnl_actual, not as a driver
+  # Columns that are drivers but sit outside Total Expected P/L (regular expressions on the column name).
+  # Checks on every row: Total Expected P/L = the other drivers; ACTUAL_PL = all drivers. A break is a note in
+  # status (strict_tieouts: true rejects the P&L instead); tolerance as `tolerance` above.
+  not_in_expected: ['^TEMPORARY_', '^Unexplained P/L$']
+  driver_map: {Unexplained P/L: unexplained}   # the tools flag the driver named "unexplained"
+  unknown_drivers: keep   # keep = load drivers under their own names (noted); fail = reject until mapped
+  # Long layout instead (one row per counterparty and driver): remove driver_columns and set
+  # driver_column: <column with the driver name> and value_column: <column with the value>
+  skip_counterparties: [TOTAL]   # rows that are totals, not counterparties, if the procedure returns any
+

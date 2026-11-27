@@ -7,7 +7,8 @@ reporting_currency: CAD
 sign_convention: "Values are adjustments to derivative fair value: negative = cost to the bank."
 
 # Components in XVA_CVA_CVACO_DVACO_FVA_by_Cpty_yyyymmdd.csv. in_total: true = adds into total XVA.
-# Total XVA = CVA + DVACO + FVA (confirmed by the desk); CVACO is a separate adjustment reported alongside.
+# Total XVA = CVA + DVA + FVA (confirmed by the desk); CVACO is a separate adjustment reported alongside.
+# DVA is the file's DVACO column (DVA close-out), stored and reported as DVA (report_as in desk_csv.yaml).
 measures:
   CVA:
     in_total: true
@@ -18,12 +19,14 @@ measures:
     in_total: false
     definition: >-
       CVA close-out: a separate adjustment reported alongside CVA. It is not part of CVA and not added into
-      total XVA (XVA = CVA + DVACO + FVA).
+      total XVA (XVA = CVA + DVA + FVA).
     unit: CAD
     additive_across: [counterparty, entity, desk]
-  DVACO:
+  DVA:
     in_total: true
-    definition: DVA close-out - the only debit valuation adjustment the desk reports; part of total XVA.
+    definition: >-
+      Debit valuation adjustment, from the DVACO (DVA close-out) column of the desk files - the only DVA the desk
+      reports. Part of total XVA.
     unit: CAD
     additive_across: [counterparty, entity, desk]
   FVA:
@@ -32,7 +35,7 @@ measures:
     unit: CAD
     additive_across: [counterparty, entity, desk]
   TOTAL:
-    definition: Total XVA = CVA + DVACO + FVA, as in the XVA column of the desk files.
+    definition: Total XVA = CVA + DVA + FVA, as in the XVA column of the desk files (DVA = DVACO column).
     unit: CAD
 
 entities:
@@ -119,17 +122,107 @@ counterparty_attributes:
   cpty_type: Counterparty type (CPTY_TYPE, e.g. S_P_D, LOW_IG)
   credit_spread_curve: Spread levels by tenor in months (MTH6 ... MTH600), stored in xva_cpty_curve. CONFIRM units (bp).
 
-# No P&L explain file is produced yet; get_pnl_attribution reports "no data" until one is landed.
+# P&L explain comes from APP_PNL_FVA2_REPORT.SP_GET_CptyFVAPnl_TimeSeries (P_XVAType = CVA, FVA, XVA).
+# The first component is the default for get_pnl_attribution; XVA is the total.
+total_label: XVA
+pnl_components: [XVA, CVA, FVA]
+
+# Drivers are the procedure's column names (confirmed 2026-11-27); "Unexplained P/L" is stored as "unexplained".
+# ACTUAL_PL and "Total Expected P/L" are stored apart (table xva_pnl_actual) and tied out on every load:
+#   Total Expected P/L = every driver below except TEMPORARY_* and unexplained
+#   ACTUAL_PL          = Total Expected P/L + TEMPORARY_* + unexplained
+# Descriptions marked CONFIRM are read from the column names; have the desk check them.
 pnl_drivers:
-  market_IR: Interest-rate moves
-  market_FX: FX moves
-  market_CR: Credit spread moves (counterparty and BMO)
-  time_decay: Passage of time with markets unchanged
-  new_trades: XVA of trades booked since the prior run
-  amendments: Changes to existing trades or CSA terms
-  terminations: Trades matured, unwound or novated away
-  model_or_parameter: Model, methodology or parameter changes
-  unexplained: Residual not attributed to any driver above
+  CPTY_CREDIT_NOCLOSEOUT: Counterparty credit spread moves on XVA excluding the close-out adjustment
+  CPTY_CREDIT_CLOSEOUT: Counterparty credit spread moves on the close-out adjustment (CVACO). CONFIRM
+  CPTY_CREDIT_ON_FVA: Counterparty credit spread moves on FVA (through survival probabilities). CONFIRM
+  BMO_CREDIT_NOCLOSEOUT: BMO's own credit spread moves on XVA excluding the close-out adjustment
+  BMO_CREDIT_CLOSEOUT: BMO's own credit spread moves on the close-out adjustment. CONFIRM
+  BMO_CREDIT_ON_FVA: BMO's own credit spread moves on FVA. CONFIRM
+  BMO_FUNDING_ASSET: BMO funding spread moves on the funding of assets (FVA cost side). CONFIRM
+  BMO_FUNDING_LIABLITY: BMO funding spread moves on the funding of liabilities (FVA benefit side); spelled as in the procedure. CONFIRM
+  DEFAULT_EVENTS: Counterparty default events
+  CAD_RATES: CAD interest-rate curve moves
+  USD_RATES: USD interest-rate curve moves
+  EUR_RATES: EUR interest-rate curve moves
+  CORRASOFR_RATES: CORRA-SOFR basis moves
+  GBP_RATES: GBP interest-rate curve moves
+  AUD_RATES: AUD interest-rate curve moves
+  JPY_RATES: JPY interest-rate curve moves
+  CHF_RATES: CHF interest-rate curve moves
+  USD_IR_VEGA: USD interest-rate volatility moves
+  CAD_IR_VEGA: CAD interest-rate volatility moves
+  EUR_IR_VEGA: EUR interest-rate volatility moves
+  GBP_IR_VEGA: GBP interest-rate volatility moves
+  USDCAD_DELTA: USD/CAD spot moves
+  EURCAD_DELTA: EUR/CAD spot moves
+  CADJPY_DELTA: CAD/JPY spot moves
+  GBPCAD_DELTA: GBP/CAD spot moves
+  AUDCAD_DELTA: AUD/CAD spot moves
+  NZDCAD_DELTA: NZD/CAD spot moves
+  CADCHF_DELTA: CAD/CHF spot moves
+  CADCNH_DELTA: CAD/CNH spot moves
+  CADCNY_DELTA: CAD/CNY spot moves
+  CADDKK_DELTA: CAD/DKK spot moves
+  CADHKD_DELTA: CAD/HKD spot moves
+  CADMXN_DELTA: CAD/MXN spot moves
+  CADNOK_DELTA: CAD/NOK spot moves
+  CADSEK_DELTA: CAD/SEK spot moves
+  CADSGD_DELTA: CAD/SGD spot moves
+  USDCAD_GAMMA: USD/CAD second-order (gamma) effect of the spot move
+  USDCAD_VEGA: USD/CAD volatility moves
+  EURUSD_VEGA: EUR/USD volatility moves
+  GBPUSD_VEGA: GBP/USD volatility moves
+  AECO_BASIS_COMMODITIES: AECO gas basis moves
+  NG_COMMODITIES: Natural gas moves
+  OIL_COMMODITIES: Crude oil moves
+  NWROC_BASIS_COMMODITIES: NWROC basis moves
+  WCS_BASIS_COMMODITIES: WCS crude basis moves
+  NGL_COMMODITIES: Natural gas liquids moves
+  NBP_COMMODITIES: NBP gas moves
+  XAU_FX_COMMODITIES: Gold moves, gold treated as a currency (XAU). CONFIRM
+  XAG_FX_COMMODITIES: Silver moves, silver treated as a currency (XAG). CONFIRM
+  XAU_COMMODITIES: Gold commodity moves. CONFIRM
+  XAG_COMMODITIES: Silver commodity moves. CONFIRM
+  XPD_FX_COMMODITIES: Palladium moves, palladium treated as a currency (XPD). CONFIRM
+  XPT_FX_COMMODITIES: Platinum moves, platinum treated as a currency (XPT). CONFIRM
+  XPD_COMMODITIES: Palladium commodity moves. CONFIRM
+  XPT_COMMODITIES: Platinum commodity moves. CONFIRM
+  AL_COMMODITIES: Aluminium moves
+  CA_COMMODITIES: CA commodity moves (copper on LME codes). CONFIRM
+  UNEXPLAINED_COMMODITIES: Commodity P&L not attributed to a commodity above; counted inside Total Expected P/L. CONFIRM
+  EQ_DELTA: Equity moves
+  CARRY: Passage of time with markets unchanged
+  DOCUMENTATION: Changes to trade or CSA documentation. CONFIRM
+  JOINT_DEFAULT_CORRELATION: Changes in joint default (counterparty and BMO) correlation. CONFIRM
+  MODEL_CHANGES: Model changes
+  CALIBRATION: Model recalibration
+  NEW_TRADES: XVA of trades booked since the prior day
+  UNWIND_TRADES: Trades unwound or terminated since the prior day. CONFIRM
+  TEMPORARY_TRADEEFFECTS: Temporary trade effects, outside Total Expected P/L. CONFIRM
+  TEMPORARY_MAPPINGISSUES: Temporary mapping issues, outside Total Expected P/L. CONFIRM
+  TEMPORARY_TRAPPEDCOLLATERAL: Temporary trapped collateral, outside Total Expected P/L. CONFIRM
+  unexplained: Unexplained P/L - actual P&L not explained by the drivers or temporary items
+
+# Groups for get_pnl_attribution, in display order: a driver joins the first group with a matching pattern
+# (regular expressions on the driver name); anything unmatched is "Other".
+pnl_driver_groups:
+  Counterparty credit: ['^CPTY_CREDIT_']
+  BMO credit: ['^BMO_CREDIT_']
+  BMO funding: ['^BMO_FUNDING_']
+  Default events: ['^DEFAULT_EVENTS$']
+  Interest rates: ['_RATES$']
+  Rates volatility: ['_IR_VEGA$']
+  FX spot: ['^[A-Z]{6}_DELTA$']
+  FX gamma and volatility: ['^[A-Z]{6}_(GAMMA|VEGA)$']
+  Commodities: ['_COMMODITIES$']
+  Equity: ['^EQ_']
+  Carry: ['^CARRY$']
+  Model and parameters: ['^(DOCUMENTATION|JOINT_DEFAULT_CORRELATION|MODEL_CHANGES|CALIBRATION)$']
+  New trades: ['^NEW_TRADES$']
+  Unwinds: ['^UNWIND_TRADES$']
+  Temporary items: ['^TEMPORARY_']
+  Unexplained: ['^unexplained$']
 
 segments:
   SSA: Sovereign, supranational and agency counterparties (from the *_SSA_ files). CONFIRM meaning.

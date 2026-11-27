@@ -151,7 +151,7 @@ Checks before anything is written: required columns, dates match `--as-of`, numb
 
 Each date has one official run per source, recorded in `data_status`; the tools read only that run. Re-running the same files is harmless. Loading new files for a date is a restatement: the new run becomes official, and the old rows stay for audit. A restatement that fails its checks leaves the old run official and records the rejection. `--archive` keeps a copy of every input file with its hash, and `landing_log` records who loaded what.
 
-Set `expected_sources` and `official_source` in `src/xva_mcp/dictionary.yaml` to the sources you actually land, or every date will show sources as missing. Stored procedures: add them to `ALLOWED` in `land_stored_procs.py` and export with `python -m xva_landing.land_stored_procs --proc ... --param as_of=... --out file.csv` (needs `pyodbc` and a read-only login in `XVA_SQL_CONN`). `landing/daily_load.example.bat` chains the daily steps for Task Scheduler.
+Set `expected_sources` and `official_source` in `src/xva_mcp/dictionary.yaml` to the sources you actually land, or every date will show sources as missing. Stored procedures: add them to `ALLOWED` in `land_stored_procs.py` and export with `python -m xva_landing.land_stored_procs --proc ... --param as_of=... --out file.csv` (needs `pyodbc` and a read-only login in `XVA_SQL_CONN`). `landing/daily_load.example.bat` chains the daily steps for Task Scheduler. The desk's MFL procedures (the LITES templates notebook route) are covered in "Stored procedures or CSV files" below.
 
 Limitation: books come from each counterparty's book in the counterparty table. If a counterparty trades in several books, book totals need a netting-set-to-book mapping, which is a later change.
 
@@ -161,7 +161,7 @@ Limitation: books come from each counterparty's book in the counterparty table. 
 
 | File | What is loaded | Checks |
 | --- | --- | --- |
-| `XVA_CVA_CVACO_DVACO_FVA_by_Cpty_yyyymmdd` (required) | CVA, CVACO, DVACO, FVA per legal entity and counterparty | COB_DATE = file date; numbers; no duplicate entity/counterparty; XVA = CVA + DVACO + FVA on every row |
+| `XVA_CVA_CVACO_DVACO_FVA_by_Cpty_yyyymmdd` (required) | CVA, CVACO, DVACO (reported as DVA), FVA per legal entity and counterparty | COB_DATE = file date; numbers; no duplicate entity/counterparty; XVA = CVA + DVACO + FVA on every row |
 | `CVA_Sens`, `FVA_Sens`, `XVA_Sens_yyyymmdd` | Per component (CVA, FVA, XVA): IR PV01 by tenor (`pv01`) and parallel (`pv01_parallel`, incl. CORRASOFR basis), IR vega; FX spot delta, vega, up/down gamma and gamma cross terms; commodity deltas by balance-of-year bucket and parallel (AECO, NG incl. LAG, OIL, NWROC, WCS, NGL, NBP, AL, CA), precious metals; EQ delta; `CARRY_1D` | Every column matches a rule; column totals = the `_Cons_` file; XVA = CVA + FVA per column |
 | `XVA_ALL01_yyyymmdd` | Credit spread CS01 (BMO cash, BMO CDS, counterparty CDS) by tenor and parallel; `CPTY_CR01_1pct`; counterparty RATING, CREDIT_CURVE, CUSTOMER_TYPE, CPTY_TYPE (shown by `search_counterparties`); the spread curve MTH6–MTH600 (table `xva_cpty_curve`) | Every column matches a rule |
 | `XVA_CVA_CVACO_DVACO_FVA_SSA_yyyymmdd` | Tags those counterparties with segment SSA | |
@@ -180,6 +180,37 @@ python -m xva_landing.load_desk_csv --config landing\desk_csv.yaml --store %USER
 `--from 2026-11-01 --to 2026-11-24` loads a range, `--reload` reloads dates already loaded, and `--values-only` loads a day whose sensitivity files are broken. `landing/daily_load_desk.example.bat` is the daily job. Everything that reads this store (command line, MCP server, REST API, the VS Code terminal) needs `XVA_DICTIONARY_PATH` set to `landing\desk_dictionary.yaml`. To try it without real data: `python sample_data\make_desk_files.py C:\temp\xva_csv_sample 2026-11-23 2026-11-24` writes fictional files in the same layout, then add `--folder C:\temp\xva_csv_sample`.
 
 New in the tools: an `entity` level (legal entity) for summaries, movers and P&L; `component` on `get_xva_sensitivities` (XVA, CVA or FVA); and `get_xva_history` for desk totals over time (`xva-cli history`). Totals add only the components marked `in_total` in the dictionary.
+
+## Stored procedures or CSV files: choosing the source
+
+Each dataset in `landing/desk_csv.yaml` (`values`, `sensitivities`, `credit_spreads`, `ssa`, `history`, `pnl_explain`) has a `source`:
+
+| `source` | What the loader does |
+| --- | --- |
+| `csv` (default) | reads the file from the CSV folder, as before (stored procedure output saved earlier) |
+| `sp` | runs the stored procedure named by the dataset's `procedure` through MFL, saves the result as CSV in `sp_output_folder\yyyymmdd\`, then loads that file with the same checks |
+| `off` | skips the dataset |
+
+The command line overrides the file for one run: `--source pnl_explain=csv`, `--source all=csv`, and several `--source` flags together. The first line of the output says which source each dataset used.
+
+`landing/stored_procs.yaml` is the allowlist of procedures: only the procedures listed there can run. Each entry has `db`, `sp` and `params`, and runs as `pymfl.DbUtils().Query(db, sp, names, values, None)`, the same way as the desk's LITES templates notebook. Parameter values can be `'{start}'`, `'{end}'`, `'{as_of}'` (the date being loaded) and `'{cpty_codes}'` (null = all); anything else is passed as written. The file comes with the P&L template procedure (`cva_pnl`, `fva_pnl` and `xva_pnl`, for `P_XVAType` CVA, FVA and XVA) and the CR01 template (`fva01`, which can be run but isn't loaded into the store yet). `backend: python` with `callable: module:function` uses your own function in place of MFL.
+
+P&L explain comes from the procedures (`pnl_explain: source: sp`) and is optional (`required: false`): if a procedure fails, the day still loads without P&L and `status` says why. The values and sensitivities stay on CSV until you switch them.
+
+```bat
+rem 1. look at what a procedure returns (needs the Python where "import pymfl_setup" works)
+python -m xva_landing.sp_runner --config landing\desk_csv.yaml --list
+python -m xva_landing.sp_runner --config landing\desk_csv.yaml --proc fva_pnl --as-of t-1 --show 10
+rem 2. map its columns in desk_csv.yaml -> pnl_explain (done for the P&L template; needed for a new procedure)
+rem 3. load a day; t-1 is the previous TOR business day
+python -m xva_landing.load_desk_csv --config landing\desk_csv.yaml --store %USERPROFILE%\xva_data\store\xva_store.duckdb --as-of t-1
+rem    the same day from CSV files saved earlier, without running anything
+python -m xva_landing.load_desk_csv --config landing\desk_csv.yaml --store %USERPROFILE%\xva_data\store\xva_store.duckdb --as-of 2026-11-24 --source all=csv
+```
+
+The P&L template procedure returns one row per legal entity and counterparty and one column per driver, and `pnl_explain` is set up for that layout (`driver_columns: all`). Drivers keep the procedure's column names, except `Unexplained P/L`, stored as `unexplained`. `ACTUAL_PL` and `Total Expected P/L` are stored apart in `xva_pnl_actual`, and every row is tied out: Total Expected P/L should equal the drivers except `TEMPORARY_*` and Unexplained P/L, and ACTUAL_PL should equal all of them. A break is a note in `status`; `strict_tieouts: true` rejects the P&L instead. `get_pnl_attribution` (`xva-cli pnl --component XVA|CVA|FVA`, XVA by default) returns the actual P&L, the driver groups from `pnl_driver_groups` in the dictionary, and the drivers, with zero drivers left out. A procedure with one row per driver instead uses `driver_column` and `value_column` (the long layout).
+
+To add another procedure later: add an entry in `stored_procs.yaml`, look at its columns with `--show`, then set `procedure:` and `source: sp` on the dataset it feeds (`values`, `credit_spreads`, `ssa`, `history`; for sensitivities, `procedure` and `control_procedure` on each file). A procedure that returns something new, such as FVA01, needs a dataset and a table first.
 
 ## Try the tools in VS Code with sample data
 

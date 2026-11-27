@@ -1,0 +1,77 @@
+# Stored procedures the loader may run. Only procedures listed here can run (an allowlist, changed by pull
+# request). Each is called through MFL exactly as in the desk's "LITES templates" notebook:
+#     pymfl.DbUtils().Query(db, sp, [parameter names], [parameter values], None)  -> pymfl.translator.translate
+#
+# Parameter values may use these placeholders (written as a whole value, e.g. '{start}'):
+#     {as_of}       the business date being loaded
+#     {start}       start of the period (= as_of for a daily load)
+#     {end}         end of the period (= as_of for a daily load)
+#     {cpty_codes}  comma-separated counterparty codes, or null for all (from --cpty on the command line)
+# Other values are passed as written: strings, true/false, null, lists.
+#
+# To add a procedure: copy an entry, change db / sp / params, run
+#     python -m xva_landing.sp_runner --config landing\desk_csv.yaml --proc <name> --as-of t-1 --show 20
+# to see its columns, then point a dataset in desk_csv.yaml at it (source: sp).
+
+backend: mfl          # mfl = pymfl as in the notebook; python = your own function (see "callable" below)
+# callable: my_module:run_sp     # backend: python -> a function run_sp(db, sp, params: dict) returning a DataFrame
+calendar: TOR         # MFL business-day calendar used for t-1 / t-2 dates
+
+procedures:
+  # ---- P&L attribution by counterparty (PnL template cell) -------------------------------------------
+  cva_pnl:
+    description: CVA P&L attribution by counterparty and driver
+    db: CVA@CMDB
+    sp: APP_PNL_FVA2_REPORT.SP_GET_CptyFVAPnl_TimeSeries
+    params:
+      p_PERIODSTART: '{start}'
+      p_PERIODEND: '{end}'
+      P_XVAType: CVA
+      P_IsBMOFG: true
+      P_Internal_Entity: null
+      P_CPTY_CODE: '{cpty_codes}'
+      P_ShowTotalOnly: false
+      P_ExcludedCpty: [XVATEST, CMLEASE]
+
+  fva_pnl:
+    description: FVA P&L attribution by counterparty and driver
+    db: CVA@CMDB
+    sp: APP_PNL_FVA2_REPORT.SP_GET_CptyFVAPnl_TimeSeries
+    params:
+      p_PERIODSTART: '{start}'
+      p_PERIODEND: '{end}'
+      P_XVAType: FVA
+      P_IsBMOFG: true
+      P_Internal_Entity: null
+      P_CPTY_CODE: '{cpty_codes}'
+      P_ShowTotalOnly: false
+      P_ExcludedCpty: [XVATEST, CMLEASE]
+
+  xva_pnl:
+    description: Total XVA P&L attribution by counterparty and driver
+    db: CVA@CMDB
+    sp: APP_PNL_FVA2_REPORT.SP_GET_CptyFVAPnl_TimeSeries
+    params:
+      p_PERIODSTART: '{start}'
+      p_PERIODEND: '{end}'
+      P_XVAType: XVA
+      P_IsBMOFG: true
+      P_Internal_Entity: null
+      P_CPTY_CODE: '{cpty_codes}'
+      P_ShowTotalOnly: false
+      P_ExcludedCpty: [XVATEST, CMLEASE]
+
+  # ---- CR01 template: FVA01 time series (not loaded into the store yet; run with --show / --out) -------
+  fva01:
+    description: FVA01 (FVA sensitivity to funding spread) time series, desk total
+    db: CVA@CMDB
+    sp: APP_CR01_REPORT.SP_GET_LITES_FVA01_TimeSeries
+    params:
+      p_PERIODSTART: '{start}'
+      p_PERIODEND: '{end}'
+      P_SOURCE_SYSTEM: LITES
+      p_SCENARIO: BASE
+      P_Internal_Entity: null
+      P_CPTY_CODE: '{cpty_codes}'
+      P_ShowTotalOnly: true
+      P_ExcludedCpty: [XVATEST, CMLEASE]

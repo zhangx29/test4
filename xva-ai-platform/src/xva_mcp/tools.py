@@ -94,6 +94,10 @@ SensGroup = Annotated[
     Literal["counterparty", "entity", "risk_factor", "bucket"],
     Field(description="Group by counterparty, entity (legal entity), risk_factor, or bucket (risk factor + tenor)"),
 ]
+PnlComponent = Annotated[
+    str | None,
+    Field(max_length=10, description="XVA (total, default), CVA or FVA - which P&L explain to return"),
+]
 Frequency = Annotated[
     Literal["auto", "daily", "month_end"],
     Field(description="daily, month_end, or auto (daily up to about three months, month-end beyond)"),
@@ -266,15 +270,18 @@ def get_pnl_attribution(
     end: End,
     level: LevelArg = "desk",
     key: ScopeKey = None,
+    component: PnlComponent = None,
 ) -> PnlAttribution:
-    """XVA P&L explain between two business dates (start exclusive, end inclusive) by driver: market moves
-    per asset class, time decay, new trades, amendments, terminations, model/parameter changes, unexplained.
-    level + key filter the scope (desk name, book name or counterparty_id); omit key for the whole desk.
-    unexplained_flag and reconciliation_gap tell you whether the explain can be relied on."""
+    """XVA P&L explain between two business dates (start exclusive, end inclusive) by driver and driver group,
+    as the desk's P&L system attributes it (driver names and groups are in the data dictionary; use
+    get_definition for a driver). component: XVA total (default), CVA or FVA. level + key filter the scope
+    (desk, legal entity, book or counterparty_id); omit key for the whole desk. actual_pl is the P&L system's
+    actual P&L when loaded; xva_change is the change in official values (the two can differ in sign
+    convention). unexplained_flag and reconciliation_gap tell you whether the explain ties out."""
     return _guarded(
         "get_pnl_attribution",
-        {"start": start, "end": end, "level": level, "key": key},
-        lambda: store.pnl_attribution(start, end, level, key),
+        {"start": start, "end": end, "level": level, "key": key, "component": component},
+        lambda: store.pnl_attribution(start, end, level, key, component),
         level=level if key else "desk",
         counterparty_id=key if level == "counterparty" else None,
     )

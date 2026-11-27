@@ -4,6 +4,7 @@
 
 Layout follows the desk's files: COB_DATE as m/d/yyyy h:mm, INTERNAL_ENTITY, CPTY_CODE, then values or one
 column per risk factor. XVA = CVA + DVACO + FVA; XVA_Sens = CVA_Sens + FVA_Sens. All numbers are made up.
+Also writes XVA_PnL_<CVA|FVA|XVA>_yyyymmdd.csv in the layout of the P&L procedure, for --source pnl_explain=csv.
 """
 
 from __future__ import annotations
@@ -51,6 +52,65 @@ CS_CURVES = ["BMO_CASH", "BMO_CDS", "CPTY_CDS"]
 CS_TENORS = ["6m", "12m", "24m", "36m", "48m", "60m", "84m", "120m", "180m", "240m", "360m", "600m"]
 
 
+# Columns of the P&L template procedure (APP_PNL_FVA2_REPORT.SP_GET_CptyFVAPnl_TimeSeries), in order.
+PNL_DRIVERS = [
+    "CPTY_CREDIT_NOCLOSEOUT", "CPTY_CREDIT_CLOSEOUT", "CPTY_CREDIT_ON_FVA", "BMO_CREDIT_NOCLOSEOUT",
+    "BMO_CREDIT_CLOSEOUT", "BMO_CREDIT_ON_FVA", "BMO_FUNDING_ASSET", "BMO_FUNDING_LIABLITY", "DEFAULT_EVENTS",
+    "CAD_RATES", "USD_RATES", "EUR_RATES", "CORRASOFR_RATES", "GBP_RATES", "AUD_RATES", "JPY_RATES", "CHF_RATES",
+    "USD_IR_VEGA", "CAD_IR_VEGA", "EUR_IR_VEGA", "GBP_IR_VEGA",
+    "USDCAD_DELTA", "EURCAD_DELTA", "CADJPY_DELTA", "GBPCAD_DELTA", "AUDCAD_DELTA", "NZDCAD_DELTA", "CADCHF_DELTA",
+    "CADCNH_DELTA", "CADCNY_DELTA", "CADDKK_DELTA", "CADHKD_DELTA", "CADMXN_DELTA", "CADNOK_DELTA", "CADSEK_DELTA",
+    "CADSGD_DELTA", "USDCAD_GAMMA", "USDCAD_VEGA", "EURUSD_VEGA", "GBPUSD_VEGA",
+    "AECO_BASIS_COMMODITIES", "NG_COMMODITIES", "OIL_COMMODITIES", "NWROC_BASIS_COMMODITIES", "WCS_BASIS_COMMODITIES",
+    "NGL_COMMODITIES", "NBP_COMMODITIES", "XAU_FX_COMMODITIES", "XAG_FX_COMMODITIES", "XAU_COMMODITIES",
+    "XAG_COMMODITIES", "XPD_FX_COMMODITIES", "XPT_FX_COMMODITIES", "XPD_COMMODITIES", "XPT_COMMODITIES",
+    "AL_COMMODITIES", "CA_COMMODITIES", "UNEXPLAINED_COMMODITIES", "EQ_DELTA", "CARRY", "DOCUMENTATION",
+    "JOINT_DEFAULT_CORRELATION", "MODEL_CHANGES", "CALIBRATION", "NEW_TRADES", "UNWIND_TRADES",
+]
+PNL_TEMPORARY = ["TEMPORARY_TRADEEFFECTS", "TEMPORARY_MAPPINGISSUES", "TEMPORARY_TRAPPEDCOLLATERAL"]
+PNL_COLUMNS = (["COB_DATE", "INTERNAL_ENTITY", "CPTY_CODE", "ACTUAL_PL"] + PNL_DRIVERS
+               + ["Total Expected P/L"] + PNL_TEMPORARY + ["Unexplained P/L"])
+# blank (not applicable) in the procedure's output for the CVA run, as in the desk's example
+_PNL_BLANK = {"CPTY_CREDIT_ON_FVA", "BMO_CREDIT_ON_FVA", "BMO_FUNDING_ASSET", "BMO_FUNDING_LIABLITY", "JPY_RATES",
+              "UNEXPLAINED_COMMODITIES", "DOCUMENTATION", "JOINT_DEFAULT_CORRELATION", "MODEL_CHANGES",
+              "CALIBRATION", "UNWIND_TRADES", *PNL_TEMPORARY}
+
+
+def _pnl_parts(d: date, cp: str) -> dict[str, dict[str, float]]:
+    """Made-up daily P&L by driver for CVA and FVA; XVA = CVA + FVA driver by driver."""
+    r = random.Random(f"pnl{cp}{d:%Y%m%d}")
+    cva = {"CPTY_CREDIT_NOCLOSEOUT": r.uniform(-2000, 9000), "BMO_CREDIT_NOCLOSEOUT": r.uniform(0, 60),
+           "CAD_RATES": r.uniform(-600, 600), "USD_RATES": r.uniform(-16000, 2000), "CORRASOFR_RATES": r.uniform(0, 2),
+           "USD_IR_VEGA": r.uniform(0, 800), "USDCAD_DELTA": r.uniform(-1000, 10000), "USDCAD_GAMMA": r.uniform(-170, 0),
+           "USDCAD_VEGA": r.uniform(-480, 0), "CARRY": r.uniform(-330, 2),
+           "NEW_TRADES": r.uniform(-110000, 20000) if cp.endswith(("IN", "BK")) else 0.0}
+    fva = {"BMO_FUNDING_ASSET": r.uniform(-900, 300), "BMO_FUNDING_LIABLITY": r.uniform(-200, 400),
+           "CPTY_CREDIT_ON_FVA": r.uniform(-150, 150), "USD_RATES": r.uniform(-3000, 3000), "CARRY": r.uniform(-90, 10)}
+    return {"CVA": {k: round(v, 4) for k, v in cva.items()}, "FVA": {k: round(v, 4) for k, v in fva.items()},
+            "unexplained": {"CVA": round(r.uniform(-700, 450), 4), "FVA": round(r.uniform(-80, 80), 4)}}
+
+
+def pnl_table(d: date, component: str, counterparties: list[tuple[str, str]] | None = None,
+              cob_date: object = None) -> tuple[list[str], list[list]]:
+    """Fictional output of the P&L procedure for one P_XVAType: one row per counterparty, one column per driver.
+    Total Expected P/L = the drivers; ACTUAL_PL = Total Expected + temporary items + Unexplained P/L."""
+    rows = []
+    for ent, cp in counterparties or COUNTERPARTIES:
+        if cp in ("LCH", "BMO"):
+            continue
+        parts = _pnl_parts(d, cp)
+        comps = ["CVA", "FVA"] if component == "XVA" else [component]
+        values = {k: sum(parts[c].get(k, 0.0) for c in comps) for k in PNL_DRIVERS}
+        unexplained = sum(parts["unexplained"][c] for c in comps)
+        blank = _PNL_BLANK if component == "CVA" else set(PNL_TEMPORARY) | {"JPY_RATES", "UNEXPLAINED_COMMODITIES"}
+        expected = sum(values.values())
+        row: list = [cob_date if cob_date is not None else cob(d), ent, cp, round(expected + unexplained, 4)]
+        row += ["" if k in blank else round(values[k], 4) for k in PNL_DRIVERS]
+        row += [round(expected, 4), "", "", "", round(unexplained, 4)]
+        rows.append(row)
+    return PNL_COLUMNS, rows
+
+
 def cob(d: date) -> str:
     return f"{d.month}/{d.day}/{d.year} 0:00"
 
@@ -82,6 +142,9 @@ def _values(rng: random.Random, d: date) -> dict[tuple[str, str], dict[str, floa
 def write_day(folder: Path, d: date, history_start: date) -> None:
     rng = random.Random(d.toordinal())
     ymd = d.strftime("%Y%m%d")
+    # P&L explain, named as pnl_explain -> files -> pattern in desk_csv.yaml (read with --source pnl_explain=csv)
+    for component in ("CVA", "FVA", "XVA"):
+        _write(folder / f"XVA_PnL_{component}_{ymd}.csv", *pnl_table(d, component))
     vals = _values(rng, d)
     header = ["COB_DATE", "INTERNAL_ENTITY", "CPTY_CODE", "CVA", "CVACO", "DVACO", "FVA", "XVA"]
 

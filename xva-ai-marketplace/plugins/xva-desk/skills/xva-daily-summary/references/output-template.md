@@ -9,17 +9,19 @@ Use this structure exactly. Replace everything in angle brackets. Omit the Data 
 
 | Measure | <previous date> | <date> | Change |
 | --- | ---: | ---: | ---: |
-| <one row per component the tool returns, e.g. CVA, CVACO, DVACO, FVA> | | | |
+| <one row per component the tool returns, e.g. CVA, CVACO, DVA, FVA> | | | |
 | Total XVA | | | |
 
 Source: <provenance.source> · as of <date> · run <run_ids> · CAD thousands
 
-**P&L explain (desk)**
+**P&L explain (desk)**: actual P&L <actual_pl>k
 
-| Driver | P&L (k) |
+| Driver group | P&L (k) |
 | --- | ---: |
-| <driver> | |
+| <one row per group the tool returns, in its order> | |
 | Unexplained | |
+
+Largest drivers: <driver> (<value>k), <driver> (<value>k).
 
 <If unexplained_flag: "Unexplained of <x>k breaches the threshold (<threshold>); treat the explain with caution.">
 

@@ -51,7 +51,7 @@ def test_loads_all_dates_and_tools_answer(desk, capsys):
     expected = by_cpty_totals(folder, D2)
 
     s = tools.call("get_xva_summary", {"as_of": D2, "level": "entity"})
-    assert list(s.totals.components) == ["CVA", "CVACO", "DVACO", "FVA"]
+    assert list(s.totals.components) == ["CVA", "CVACO", "DVA", "FVA"]
     assert s.totals.total == pytest.approx(expected["XVA"], abs=0.05)  # CVACO is not added in
     assert s.totals.components["CVACO"] == pytest.approx(expected["CVACO"], abs=0.05)
     assert {r.key for r in s.rows} == {"BMO", "BCMC", "BCML"}
@@ -87,7 +87,7 @@ def test_loads_all_dates_and_tools_answer(desk, capsys):
                                                  "top_n": 200})
     assert all(" parallel" not in r.label for r in tenor.rows)
 
-    with pytest.raises(tools.DataMissing, match="No P&L explain"):
+    with pytest.raises(tools.DataMissing, match="P&L explain is loaded"):
         tools.call("get_pnl_attribution", {"start": D1, "end": D2})
 
 
@@ -179,7 +179,8 @@ def test_control_file_mismatch_is_a_note_unless_strict(desk, tmp_path):
 
     strict = tmp_path / "strict.yaml"
     strict.write_text(CONFIG.read_text(encoding="utf-8").replace("strict_tieouts: false", "strict_tieouts: true")
-                      .replace("dictionary: desk_dictionary.yaml", f"dictionary: '{ROOT / 'landing' / 'desk_dictionary.yaml'}'"),
+                      .replace("dictionary: desk_dictionary.yaml", f"dictionary: '{ROOT / 'landing' / 'desk_dictionary.yaml'}'")
+                      .replace("stored_procs: stored_procs.yaml", f"stored_procs: '{ROOT / 'landing' / 'stored_procs.yaml'}'"),
                       encoding="utf-8")
     edit(folder / "XVA_Sens_Cons_20261124.csv", lambda r: r[1].__setitem__(1, "88888"))
     code = ldc.main(["--config", str(strict), "--store", str(store_path), "--folder", str(folder), "--as-of", "2026-11-24"])
@@ -190,3 +191,22 @@ def test_setup_problems(desk, tmp_path, capsys):
     folder, store_path = desk
     assert load(tmp_path / "nowhere", store_path, "--all") == 2
     assert "not reachable" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("text", ["11/25/2026 12:00:00AM", "11/25/2026 12:00:00 AM", "11/25/2026 0:00",
+                                  "11/25/2026", "2026-11-25 00:00:00", "11/25/2026 00:00:00.000"])
+def test_cob_date_styles(text):
+    formats = ldc.load_config(CONFIG)["date_formats"]
+    assert ldc.parse_date(text, formats) == date(2026, 11, 25)
+
+
+def test_rename_existing_store(desk):
+    from xva_landing.schema import rename_measure
+
+    folder, store_path = desk
+    load(folder, store_path, "--all")
+    counts = rename_measure(store_path, "DVA", "DVACO")  # as stores loaded before report_as existed
+    assert counts["xva_value"] > 0
+    rename_measure(store_path, "DVACO", "DVA")
+    assert "DVA" in tools.call("get_xva_summary", {"as_of": D2}).totals.components
+

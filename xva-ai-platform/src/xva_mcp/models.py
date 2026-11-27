@@ -113,6 +113,7 @@ class SensitivityReport(BaseModel):
 class DriverRow(BaseModel):
     driver: str
     value: float
+    group: str | None = Field(default=None, description="Driver group from the data dictionary, e.g. Interest rates")
 
 
 class PnlAttribution(BaseModel):
@@ -120,12 +121,26 @@ class PnlAttribution(BaseModel):
     end: date = Field(description="End date (inclusive)")
     level: Level
     key: str | None
-    xva_change: float = Field(description="Change in total XVA between start and end from the official values")
-    drivers: list[DriverRow] = Field(description="Explain by driver, including 'unexplained'")
+    component: str | None = Field(default=None, description="XVA (total), CVA or FVA; None = as stored")
+    xva_change: float = Field(description="Change in the component (or total XVA) between start and end")
+    actual_pl: float | None = Field(
+        default=None, description="Actual P&L from the P&L system for the period (None when it is not loaded)"
+    )
+    expected_pl: float | None = Field(
+        default=None, description="Total expected P&L from the P&L system: the drivers except temporary items and unexplained"
+    )
+    groups: list[DriverRow] = Field(
+        default_factory=list, description="Explain by driver group (sums of the drivers), in the dictionary's order"
+    )
+    drivers: list[DriverRow] = Field(description="Explain by driver, including 'unexplained'; zero drivers are omitted")
     unexplained: float
     unexplained_flag: bool = Field(description="True when unexplained breaches the dictionary thresholds")
+    reconciliation_basis: Literal["actual_pl", "xva_change"] = Field(
+        default="xva_change", description="What the drivers are tied to: actual_pl when loaded, else xva_change"
+    )
     reconciliation_gap: float = Field(
-        description="xva_change minus the sum of drivers; non-zero means the explain does not tie to the values"
+        description="actual_pl (or xva_change when no actual P&L is loaded) minus the sum of drivers; "
+        "non-zero means the explain does not tie out"
     )
     provenance: Provenance
 

@@ -1,4 +1,7 @@
-"""Run an allowlisted set of stored procedures with bound parameters under a read-only login.
+"""Run an allowlisted set of stored procedures with bound parameters under a read-only login (ODBC route).
+
+The desk's procedures that run through MFL (as in the LITES templates notebook) use sp_runner.py and
+landing/stored_procs.yaml instead; this module is for a direct ODBC connection.
 
 Only procedures listed in ALLOWED can run, with exactly the parameters listed, in order.
 Nothing from a user or an agent is ever concatenated into SQL.
